@@ -26,10 +26,22 @@ KEEP_TEMPLATES = {
     "semantic loan", "sl", "phono-semantic matching", "psm",
     # roots and relatives
     "root", "cog", "cognate", "doublet", "dbt",
+    # newer all-in-one template (Wiktionary is migrating core entries to it)
+    "etymon",
     # morphology
     "af", "affix", "prefix", "pre", "suffix", "suf", "compound", "com",
     "confix", "con", "blend", "surf",
 }
+
+
+def etymology_prose(text, word):
+    """Drop the "Etymology tree" diagram that {{etymon}} puts before the sentences."""
+    lines = text.split("\n")
+    if lines and lines[0].strip() == "Etymology tree":
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() == word or line.rstrip().endswith(" " + str(word)):
+                return "\n".join(lines[i + 1:]).strip()
+    return text
 
 
 def slim(entry):
@@ -53,7 +65,7 @@ def slim(entry):
         "l": entry.get("lang_code"),
         "p": entry.get("pos"),
         "g": gloss[:200],
-        "e": (entry.get("etymology_text") or "")[:600],
+        "e": etymology_prose(entry.get("etymology_text") or "", entry.get("word"))[:3000],
         "t": templates,
         "f": lemma,
     }

@@ -11,10 +11,37 @@ French *père*.
 ## Status
 
 - [x] **Data pipeline** — Wiktionary etymologies → typed SQLite graph (`pipeline/`)
-- [ ] iOS MVP — camera → text recognition → lookup → 2D network view
+- [x] **Backend API** — scene words in, shared-ancestry network out (`backend/`)
+- [ ] iOS MVP — camera → text recognition → API → 2D network view
 - [ ] Speech input
 - [ ] AR mode (words anchored in space, linked to floating roots)
 - [ ] Saved sessions / personal map of collected words
+
+## Backend
+
+The graph lives server-side; the app sends the words it recognised and gets the network back.
+
+```sh
+cd backend
+python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn httpx pytest
+.venv/bin/uvicorn app:app --reload          # http://localhost:8000/docs
+.venv/bin/pytest -q
+```
+
+`POST /scene` — the words seen together, optionally with the scene's likely language:
+
+```json
+{"lang": "it", "words": [{"text": "padre"}, {"text": "paternalistic", "lang": "en"}]}
+```
+
+returns each word's resolved terms, and for every pair that shares ancestry the nearest
+meeting point (*pater*), both paths to it, and the `deeper` chain above it
+(*\*patēr* → *\*ph₂tḗr* → root *\*peh₂-*), plus a `nodes` table for labels.
+`GET /word?text=padri&lang=it` gives one word's lineage. `ETYMON_DB` points at the database
+(default `pipeline/data/etymon.sqlite`).
+
+Two-word connections can also be explored from the shell:
+`pipeline/.venv/bin/python pipeline/connect.py it padre en paternalistic`.
 
 ## Data pipeline
 

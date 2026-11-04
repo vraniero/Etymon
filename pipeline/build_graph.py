@@ -21,6 +21,7 @@ Usage: .venv/bin/python build_graph.py [out.sqlite]
 """
 import gzip
 import json
+import re
 import sqlite3
 import sys
 import unicodedata
@@ -70,6 +71,54 @@ CREATE TABLE form     (lang TEXT NOT NULL, form TEXT NOT NULL, lemma INTEGER NOT
 """
 
 
+COMPOUND_PROSE = re.compile(r"(?:^|\n)From ([^.\n]+? \+ [^.\n]+?)\.")
+PAREN = re.compile(r"\s*\([^)]*\)|\s*“[^”]*”")
+PROSE_KIND = {"inherited": "inherited", "borrowed": "borrowed", "derived": "derived",
+              "learned borrowing": "learned", "semi-learned borrowing": "learned",
+              "calque of": "calque", "from": "derived"}
+PROSE_LEAD = re.compile(r"(?:^|\n|\. )(Inherited|Borrowed|Derived|Learned borrowing|"
+                        r"Semi-learned borrowing|Calque of|From)\s+(?:from\s+)?([^.\n]+)")
+PROSE_FROM = re.compile(r",?\s+(?:which (?:is|are) )?(?:ultimately )?from\s+")
+PROSE_OR = re.compile(r",\s*(?:or\s+)?|\s+or\s+|\s+and\s+")
+HEDGED = re.compile(r",?\s+(?:possibly|perhaps|probably|maybe)\b.*", re.I)
+UNCERTAIN = re.compile(r"\b(possibly|perhaps|probably|maybe|uncertain|unknown|"
+                       r"compare|see|cognate)\b", re.I)
+TREE_SUFFIXES = ("bor.", "inh.", "der.", "lbor.", "cal.", "slbor.")
+
+
+def prose(text, word):
+    """Drop the "Etymology tree" diagram that precedes the sentences."""
+    lines = text.split("\n")
+    if lines and lines[0].strip() == "Etymology tree":
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() == word or line.rstrip().endswith(" " + word):
+                return "\n".join(lines[i + 1:])
+        return "\n".join(l for l in lines[1:] if not l.rstrip().endswith(TREE_SUFFIXES))
+    return text
+
+
+def find_word(text, cursor, a):
+    """(start, end) of the template's word in the prose, searching from cursor."""
+    for w in (a.get("4"), a.get("3")):
+        if w:
+            i = text.find(w, cursor)
+            if i >= 0:
+                return i, i + len(w)
+    return None
+
+
+def classify_gap(gap):
+    """How the next etymon relates to the previous one, judging by the words between them."""
+    g = " " + gap.lower() + " "
+    if " from " in g or "<" in g or " via " in g or " ultimately " in g:
+        return "chain"
+    if "." in gap or ";" in gap:
+        return "break"
+    if " or " in g or " and " in g or "," in gap or "/" in gap:
+        return "alternative"
+    return "chain"
+
+
 def load_languages():
     langs = json.load(open(DATA / "languages.json"))
     etym = json.load(open(DATA / "etym_languages.json"))
@@ -101,6 +150,55 @@ class Graph:
         self.edges = {}       # (src, dst, kind) -> inferred
         self.forms = set()
         self._strip_cache = {}
+        # language name -> code, for reading prose etymologies ("from Old English fæder").
+        # Full languages win over etymology-only varieties that share a name.
+        self.lang_by_name = {}
+        for code, name, family, parent, _ in sorted(language_rows.values(),
+                                                    key=lambda r: r[3] is None):
+            if name:
+                self.lang_by_name[name] = code
+        self.max_name_words = max(len(n.split()) for n in self.lang_by_name)
+
+    def split_lang(self, item):
+        """"Old English fæder" -> ("ang", "fæder"); longest language name wins."""
+        words = item.split()
+        for k in range(min(self.max_name_words, len(words) - 1), 0, -1):
+            code = self.lang_by_name.get(" ".join(words[:k]))
+            if code:
+                return code, " ".join(words[k:])
+        return None, item
+
+    def prose_ancestry(self, head, text, word):
+        """Read the chain from prose when an entry has no ancestry templates
+        (entries written with {{etymon}}): "Inherited from A, from B, from C"."""
+        m = PROSE_LEAD.search(prose(text, word))
+        if not m:
+            return
+        kind = PROSE_KIND[m.group(1).lower()]
+        body = HEDGED.sub("", PAREN.sub("", m.group(2)))
+        parents, prev_lang = [head], None
+        for depth, step in enumerate(PROSE_FROM.split(body)):
+            group = []
+            for item in PROSE_OR.split(step.strip()):
+                item = item.strip(" ,;:")
+                if not item or "+" in item or UNCERTAIN.search(item):
+                    group = None  # compound or hedged step: stop the chain here
+                    break
+                lang, w = self.split_lang(item)
+                lang = lang or prev_lang  # "from Latin paternus, from pater"
+                if not lang or not w or len(w.split()) > 2:
+                    group = None
+                    break
+                group.append(self.node(lang, w))
+                prev_lang = lang
+            if not group:
+                return
+            for p in parents:
+                for src in group:
+                    self.edge(p, src, kind, int(p != head))
+            parents = group
+            if kind == "borrowed":
+                kind = "derived"  # later steps of a borrowing are its source's own history
 
     def strips_length(self, lang):
         if lang not in self._strip_cache:
@@ -144,6 +242,47 @@ class Graph:
         # a direct statement beats an inferred one
         self.edges[key] = min(self.edges.get(key, 1), inferred)
 
+    def add_ancestry(self, head, word, text, templates):
+        """Turn the entry's ancestry templates into edges, using the prose between them.
+
+        "from A, from B" is a chain (head -> A -> B); "from A, B, or C, which are from D"
+        lists alternatives at one level (head -> A|B|C, and each of A|B|C -> D).
+        """
+        text = prose(text, word)
+        groups = []       # [[(node, kind)]], one list per chain level
+        cursor = 0
+        for t in templates:
+            name, a = t["n"], t["a"]
+            if name not in ANCESTRY:
+                continue
+            src = self.node(a.get("2"), a.get("3"))
+            if src is None or src == head or any(src == n for g in groups if g for n, _ in g):
+                continue  # "der" and "der+" both appear for the same link
+            step = "chain"
+            pos = find_word(text, cursor, a)
+            if pos is not None and groups:
+                start, end = pos
+                step = classify_gap(text[cursor:start])
+            if pos is not None:
+                cursor = pos[1]
+            if step == "alternative":
+                groups[-1].append((src, ANCESTRY[name]))
+            elif step == "chain":
+                groups.append([(src, ANCESTRY[name])])
+            else:  # unrelated sentence: keep it as its own unlinked level
+                groups.append(None)
+                groups.append([(src, ANCESTRY[name])])
+        parents = [(head, None)]
+        for level, group in enumerate(groups):
+            if group is None:
+                parents = None
+                continue
+            if parents is not None:
+                for p, _ in parents:
+                    for src, kind in group:
+                        self.edge(p, src, kind, int(p != head))
+            parents = group
+
     def add_entry(self, e):
         lang, word = e["l"], e["w"]
         head = self.node(lang, word)
@@ -160,16 +299,12 @@ class Graph:
             if lemma and lemma != head:
                 self.forms.add((lang, self.clean(lang, word), lemma))
 
-        prev = head
+        self.add_ancestry(head, word, e["e"] or "", e["t"])
+        if e["e"] and not any(t["n"] in ANCESTRY for t in e["t"]):
+            self.prose_ancestry(head, e["e"], word)
         for t in e["t"]:
             name, a = t["n"], t["a"]
-            if name in ANCESTRY:
-                src = self.node(a.get("2"), a.get("3"))
-                if src is None or src == prev:
-                    continue
-                self.edge(prev, src, ANCESTRY[name], int(prev != head))
-                prev = src
-            elif name == "root":
+            if name == "root":
                 for k in range(3, 8):
                     self.edge(head, self.node(a.get("2"), a.get(str(k))), "root", 0)
             elif name in COGNATE:
@@ -187,6 +322,16 @@ class Graph:
                     if ":" in part and part.split(":", 1)[0] in self.language_rows:
                         part_lang, part = part.split(":", 1)
                     self.edge(head, self.node(part_lang, part), "component", 0)
+
+        if e["e"] and not any(t["n"] in ANCESTRY or t["n"] in COMPONENT for t in e["t"]):
+            # Entries written with {{etymon}} keep no templates in the slim dump; recover
+            # plain compounds from the prose: "From paternal + -istic."
+            m = COMPOUND_PROSE.search(prose(e["e"], word))
+            if m:
+                for part in m.group(1).split(" + "):
+                    part = PAREN.sub("", part).strip()
+                    if part and len(part.split()) <= 2:
+                        self.edge(head, self.node(lang, part), "component", 0)
 
 
 def read_slim(path):
@@ -226,8 +371,13 @@ def main(out_path):
             yield tid, lang, word, gloss or None, etym or None, zipf or None, has_entry
 
     db.executemany("INSERT INTO term VALUES (?,?,?,?,?,?,?)", term_rows())
+    # A word whose own entry states where it comes from is authoritative: chain links
+    # attributed to it by other entries are dropped.
+    ancestry_kinds = set(ANCESTRY.values())
+    stated = {s for (s, _, k), i in graph.edges.items() if not i and k in ancestry_kinds}
     db.executemany("INSERT INTO edge VALUES (?,?,?,?)",
-                   ((s, d, k, i) for (s, d, k), i in graph.edges.items()))
+                   ((s, d, k, i) for (s, d, k), i in graph.edges.items()
+                    if not (i and s in stated)))
     db.executemany("INSERT INTO form VALUES (?,?,?)", graph.forms)
     db.executescript("""
         CREATE INDEX edge_dst ON edge(dst);

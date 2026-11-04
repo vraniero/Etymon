@@ -86,6 +86,28 @@ UNCERTAIN = re.compile(r"\b(possibly|perhaps|probably|maybe|uncertain|unknown|"
 TREE_SUFFIXES = ("bor.", "inh.", "der.", "lbor.", "cal.", "slbor.")
 
 
+PREFIX_TEMPLATES = {"prefix", "pre"}
+SUFFIX_TEMPLATES = {"suffix", "suf"}
+CONFIX_TEMPLATES = {"confix", "con"}
+
+
+def affix_form(template, part, index, count):
+    """{{prefix}}, {{suffix}} and {{confix}} take affixes without their hyphens
+    ({{confix|en|lexico|graphy}}); restore them so affixes are never read as words."""
+    if part.startswith("-") or part.endswith("-"):
+        return part
+    if template in PREFIX_TEMPLATES and index < count - 1:
+        return part + "-"
+    if template in SUFFIX_TEMPLATES and index == count - 1 and count > 1:
+        return "-" + part
+    if template in CONFIX_TEMPLATES:
+        if index == 0:
+            return part + "-"
+        if index == count - 1:
+            return "-" + part
+    return part
+
+
 def prose(text, word):
     """Drop the "Etymology tree" diagram that precedes the sentences."""
     lines = text.split("\n")
@@ -313,10 +335,9 @@ class Graph:
                 for k in range(2, 6):
                     self.edge(head, self.node(lang, a.get(str(k))), "doublet", 0)
             elif name in COMPONENT:
-                for k in range(2, 8):
-                    part = a.get(str(k))
-                    if not part:
-                        continue
+                parts = [(k, a.get(str(k))) for k in range(2, 8) if a.get(str(k))]
+                for n, (k, part) in enumerate(parts):
+                    part = affix_form(name, part, n, len(parts))
                     part_lang = lang
                     # af/compound parts may be language-prefixed: "la:pater"
                     if ":" in part and part.split(":", 1)[0] in self.language_rows:

@@ -12,10 +12,29 @@ French *père*.
 
 - [x] **Data pipeline** — Wiktionary etymologies → typed SQLite graph (`pipeline/`)
 - [x] **Backend API** — scene words in, shared-ancestry network out (`backend/`)
-- [ ] iOS MVP — camera → text recognition → API → 2D network view
+- [x] **iOS MVP** — camera / photo / typed text → text recognition → API → 2D network view (`ios/`)
+- [ ] Field testing on a device; offline cache of common words
 - [ ] Speech input
 - [ ] AR mode (words anchored in space, linked to floating roots)
 - [ ] Saved sessions / personal map of collected words
+
+## iOS app
+
+SwiftUI, iOS 17+. The Xcode project is generated from `ios/project.yml`:
+
+```sh
+brew install xcodegen
+cd ios && xcodegen generate && open Etymon.xcodeproj
+```
+
+Run the backend first; the simulator reaches it at `http://localhost:8000` (change it in the
+app's Settings — on a phone use the Mac's address and start uvicorn with `--host 0.0.0.0`).
+The simulator has no camera: use **Photo** or **Type**; launching with `-demo` connects the
+sample text at once. Tests: `xcodebuild -scheme Etymon -destination 'platform=iOS Simulator,name=iPhone 17' test`.
+
+Words read in a scene accumulate (up to 20), the scene's language is detected on-device,
+and each group of related words is drawn under the ancestor it shares; **Full paths** shows
+every step, and tapping a meeting point opens both chains and the deeper line to the root.
 
 ## Backend
 

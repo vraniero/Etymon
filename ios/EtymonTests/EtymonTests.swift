@@ -1,0 +1,85 @@
+import XCTest
+@testable import Etymon
+
+final class WordExtractorTests: XCTestCase {
+    func testSplitsDropsStopwordsAndDuplicates() {
+        let words = WordExtractor.words(in: "FARMACIA della Stazione\nl'eau, the Water! water 24h")
+        XCTAssertEqual(words, ["FARMACIA", "Stazione", "eau", "Water"])
+    }
+
+    func testKeepsAccentedLetters() {
+        XCTAssertEqual(WordExtractor.words(in: "caffè — père, Straße"), ["caffè", "père", "Straße"])
+    }
+
+    func testDominantLanguage() {
+        XCTAssertEqual(WordExtractor.dominantLanguage(of: "Farmacia aperta tutta la notte"), "it")
+        XCTAssertEqual(WordExtractor.dominantLanguage(of: "Die Apotheke ist heute geschlossen"), "de")
+    }
+}
+
+final class SceneResponseTests: XCTestCase {
+    /// A real /scene response: caffè, coffee, padre, paternalistic.
+    static func fixture() throws -> SceneResponse {
+        let url = try XCTUnwrap(Bundle(for: SceneResponseTests.self)
+            .url(forResource: "scene_fixture", withExtension: "json"))
+        return try JSONDecoder().decode(SceneResponse.self, from: Data(contentsOf: url))
+    }
+
+    func testDecodes() throws {
+        let r = try Self.fixture()
+        XCTAssertEqual(r.words.map(\.text), ["caffè", "coffee", "padre", "paternalistic"])
+        let padre = try XCTUnwrap(r.connections.first { $0.a == 2 && $0.b == 3 })
+        XCTAssertEqual(r.node(padre.meet)?.word, "pater")
+        XCTAssertTrue(padre.deeper.contains { r.node($0.node)?.word == "*ph₂tḗr" })
+    }
+
+    func testLayoutPutsAncestorsAboveWords() throws {
+        let r = try Self.fixture()
+        let layout = GraphLayout(r)
+        for i in r.words.indices where i != 0 {
+            XCTAssertEqual(layout.items[.word(i)]?.level, 0)
+        }
+        // every link climbs
+        for link in layout.links {
+            XCTAssertLessThan(layout.items[link.from]!.level, layout.items[link.to]!.level)
+        }
+        let pater = try XCTUnwrap(r.connections.first { $0.a == 2 }).meet
+        XCTAssertEqual(layout.items[.term(pater)]?.isMeeting, true)
+    }
+
+    func testSceneWordThatIsTheMeetingPoint() throws {
+        // coffee meets caffè at caffè itself: drawn as the scene word, raised above coffee
+        let r = try Self.fixture()
+        let layout = GraphLayout(r)
+        XCTAssertEqual(layout.items[.word(0)]?.isMeeting, true)
+        XCTAssertGreaterThan(layout.items[.word(0)]!.level, 0)
+    }
+
+    func testNodesOnALevelDoNotOverlap() throws {
+        let layout = GraphLayout(try Self.fixture())
+        let byLevel = Dictionary(grouping: layout.items.values.filter { $0.level > 0 }, by: \.level)
+        for (_, items) in byLevel {
+            let xs = items.map(\.x).sorted()
+            for (a, b) in zip(xs, xs.dropFirst()) {
+                XCTAssertGreaterThanOrEqual(b - a, GraphLayout.minSpacing - 0.001)
+            }
+        }
+    }
+
+    func testConnectedWordsAreNeighbours() throws {
+        let r = try Self.fixture()
+        let order = GraphLayout.wordOrder(r)
+        XCTAssertEqual(Set(order), Set(r.words.indices))
+        for c in r.connections {
+            let gap = abs(order.firstIndex(of: c.a)! - order.firstIndex(of: c.b)!)
+            XCTAssertEqual(gap, 1, "\(r.words[c.a].text) and \(r.words[c.b].text) should be adjacent")
+        }
+    }
+
+    func testFullPathsShowEveryStep() throws {
+        let r = try Self.fixture()
+        let compact = GraphLayout(r), full = GraphLayout(r, compact: false)
+        XCTAssertGreaterThan(full.items.count, compact.items.count)
+        XCTAssertGreaterThan(full.maxLevel, compact.maxLevel)
+    }
+}

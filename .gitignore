@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 # downloaded dumps and generated databases are reproducible via the pipeline scripts
 pipeline/data/
+# iOS: build output; the Xcode project is generated from ios/project.yml
+ios/build/
+ios/Etymon.xcodeproj/
+ios/Etymon/Info.plist

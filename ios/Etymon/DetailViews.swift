@@ -38,6 +38,10 @@ struct ConnectionDetail: View {
         List {
             Section {
                 Text("**\(a)** and **\(b)** both go back to *\(meet?.word ?? "?")* (\(meet?.language ?? "")).")
+                if let depth = connection.depth {
+                    LabeledContent("Search depth needed", value: depth.formatted())
+                        .font(.caption)
+                }
             }
             Section(a) { ChainView(steps: connection.pathA, node: response.node) }
             Section(b) { ChainView(steps: connection.pathB, node: response.node) }
@@ -83,6 +87,7 @@ struct WordDetail: View {
 
 struct SettingsView: View {
     @AppStorage(APIClient.baseURLKey) private var baseURL = APIClient.defaultBaseURL
+    @AppStorage(SearchDepth.storageKey) private var depth = SearchDepth.defaultValue
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -98,9 +103,40 @@ struct SettingsView: View {
                     Text("The simulator can use localhost. On a phone, use your Mac's address, "
                          + "e.g. http://192.168.1.20:8000, and start the server with --host 0.0.0.0.")
                 }
+                Section {
+                    SearchDepthStepper()
+                    Button("Reset to \(SearchDepth.defaultValue.formatted())") {
+                        depth = SearchDepth.defaultValue
+                    }
+                    .disabled(depth == SearchDepth.defaultValue)
+                } header: {
+                    Text("Search")
+                } footer: {
+                    Text("How far back each word's ancestry is searched for shared roots. Each link "
+                         + "costs about 1 (a jump to a reconstructed root costs 6). Deeper finds older, "
+                         + "more distant connections but can be noisier and slower.")
+                }
             }
             .navigationTitle("Settings")
             .toolbar { Button("Done") { dismiss() } }
         }
+    }
+}
+
+/// Search depth control, shared by Settings and the network header. Stored in
+/// UserDefaults; ContentView asks the backend again when it changes.
+struct SearchDepthStepper: View {
+    var compact = false
+    @AppStorage(SearchDepth.storageKey) private var depth = SearchDepth.defaultValue
+
+    var body: some View {
+        Stepper(value: $depth, in: SearchDepth.range, step: 1) {
+            if compact {
+                Text("Depth \(depth.formatted())").monospacedDigit()
+            } else {
+                LabeledContent("Search depth", value: depth.formatted()).monospacedDigit()
+            }
+        }
+        .accessibilityIdentifier("searchDepth")
     }
 }

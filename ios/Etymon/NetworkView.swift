@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The 2D network. Each group of words that share ancestry is drawn as its own block:
+/// The 2D network, as a tree or on a world map (GeoMapView). Each group of words that share ancestry is drawn as its own block:
 /// the scene words at the bottom, their meeting points (highlighted) above, lines of
 /// descent between them. Words with no connection sit in a row at the end. Tapping a
 /// node opens its story.
@@ -8,13 +8,34 @@ struct NetworkView: View {
     let response: SceneResponse
     var compact = true
     var onSelect: (GraphLayout.Key) -> Void
+    @AppStorage(NetworkStyle.storageKey) private var style: NetworkStyle = .tree
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("View", selection: $style) {
+                ForEach(NetworkStyle.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal).padding(.vertical, 4)
+            .accessibilityIdentifier("networkStyle")
+            switch style {
+            case .tree: tree
+            case .map:
+                if let search = response.search { SearchDepthBar(search: search).padding(.bottom, 6) }
+                GeoMapView(response: response, onSelect: onSelect)
+            }
+        }
+    }
+
+    @ViewBuilder private var tree: some View {
         let clusters = GraphLayout.clusters(response)
         let connected = Set(clusters.joined())
         let loose = response.words.indices.filter { !connected.contains($0) }
         ScrollView {
             VStack(spacing: 8) {
+                if let search = response.search {
+                    SearchDepthBar(search: search)
+                }
                 ForEach(clusters, id: \.self) { cluster in
                     ClusterGraph(layout: GraphLayout(response, compact: compact, only: Set(cluster)),
                                  response: response,
@@ -24,7 +45,7 @@ struct NetworkView: View {
                 }
                 if !loose.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(clusters.isEmpty ? "No shared ancestry found yet" : "Not connected")
+                        Text(clusters.isEmpty ? "No connections found yet" : "Not connected")
                             .font(.caption).foregroundStyle(.secondary)
                         FlowLayout(spacing: 8) {
                             ForEach(loose, id: \.self) { i in
@@ -114,6 +135,46 @@ private struct ClusterGraph: View {
     }
 }
 
+/// How deep the search behind this network went: the depth asked for, how far the climbs
+/// actually got (they stop early when a word's recorded ancestry runs out), and what the
+/// deepest connection needed. The stepper changes the depth and searches again.
+struct SearchDepthBar: View {
+    let search: SearchInfo
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(summary).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                SearchDepthStepper(compact: true).font(.caption).fixedSize()
+            }
+            GeometryReader { geo in
+                let w = geo.size.width, limit = max(search.maxCost, 1)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.15))
+                    Capsule().fill(Color.teal.opacity(0.45))
+                        .frame(width: w * min(search.reached / limit, 1))
+                    if search.depth > 0 {
+                        Rectangle().fill(Color.orange).frame(width: 3, height: 12)
+                            .offset(x: w * min(search.depth / limit, 1) - 1.5)
+                    }
+                }
+            }
+            .frame(height: 8)
+            .accessibilityElement()
+            .accessibilityLabel(summary)
+        }
+        .padding(.horizontal).padding(.top, 4)
+        .accessibilityIdentifier("searchDepthBar")
+    }
+
+    private var summary: String {
+        let limit = search.maxCost.formatted(), reached = search.reached.formatted()
+        let deepest = search.depth > 0 ? " · deepest connection \(search.depth.formatted())" : ""
+        return "Searched \(reached) of \(limit)\(deepest)"
+    }
+}
+
 func color(for kind: String?) -> Color {
     switch kind {
     case "inherited": return .blue
@@ -125,21 +186,28 @@ func color(for kind: String?) -> Color {
 }
 
 private let meetingFill = Color(red: 1.0, green: 0.92, blue: 0.62)
+private let wordFill = Color(red: 0.84, green: 0.91, blue: 1.0)
+/// Text on the fixed light fills (yellow, light blue) stays dark in dark mode too.
+private let ink = Color.black
+private let inkSecondary = Color.black.opacity(0.6)
 
 struct WordChip: View {
     let word: SceneWord
     let isMeeting: Bool
 
     var body: some View {
+        let known = !word.terms.isEmpty
         VStack(spacing: 1) {
             Text(word.text).font(.headline)
-            if let lang = word.lang { Text(lang).font(.caption2).foregroundStyle(.secondary) }
+                .foregroundStyle(known ? ink : Color.secondary)
+            if let lang = word.lang {
+                Text(lang).font(.caption2)
+                    .foregroundStyle(known ? inkSecondary : Color.secondary)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 5)
-        .background(Capsule().fill(word.terms.isEmpty ? Color(.systemGray5)
-                                   : isMeeting ? meetingFill : Color(red: 0.84, green: 0.91, blue: 1.0)))
+        .background(Capsule().fill(!known ? Color(.systemGray5) : isMeeting ? meetingFill : wordFill))
         .overlay(Capsule().stroke(isMeeting ? Color.orange : .clear, lineWidth: 1.5))
-        .foregroundStyle(word.terms.isEmpty ? .secondary : .primary)
     }
 }
 
@@ -157,8 +225,10 @@ private struct NodeLabel: View {
                 Text(node?.word ?? "?")
                     .font(item.isMeeting ? .subheadline.bold() : .caption)
                     .italic(node?.reconstructed ?? false)
+                    .foregroundStyle(item.isMeeting ? ink : Color.primary)
                 Text(node?.language ?? "")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .font(.system(size: 9))
+                    .foregroundStyle(item.isMeeting ? inkSecondary : Color.secondary)
             }
             .lineLimit(1)
             .frame(maxWidth: 100)

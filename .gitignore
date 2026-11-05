@@ -9,3 +9,5 @@ ios/build/
 ios/build-device/
 ios/Etymon.xcodeproj/
 ios/Etymon/Info.plist
+# logs, e.g. backend/backend.log
+*.log

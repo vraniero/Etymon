@@ -94,6 +94,13 @@ final class SceneModel {
         }
     }
 
+    /// Ask again for the same words, e.g. after the search depth changed.
+    func refresh() {
+        guard !words.isEmpty else { return }
+        pending?.cancel()
+        pending = Task { [weak self] in await self?.fetch() }
+    }
+
     func fetch() async {
         let requested = words
         guard requested.count >= 1 else { response = nil; return }
@@ -101,8 +108,10 @@ final class SceneModel {
         isLoading = true
         defer { isLoading = false }
         do {
-            let result = try await client().scene(words: requested, lang: language)
-            guard requested == words else { return }  // a newer scene superseded this one
+            let depth = SearchDepth.current
+            let result = try await client().scene(words: requested, lang: language, maxCost: depth)
+            // a newer scene, or the same one at another depth, superseded this one
+            guard requested == words, depth == SearchDepth.current else { return }
             response = result
             error = nil
         } catch is CancellationError {

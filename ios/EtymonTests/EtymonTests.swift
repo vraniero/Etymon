@@ -115,3 +115,33 @@ final class OverlayTests: XCTestCase {
         XCTAssertEqual(fill.height, 80, accuracy: 0.01)
     }
 }
+
+final class SearchDepthTests: XCTestCase {
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: SearchDepth.storageKey)
+    }
+
+    func testRequestSendsDepth() throws {
+        let data = try JSONEncoder().encode(SceneRequest(words: [.init(text: "padre", lang: "it")],
+                                                         lang: nil, maxCost: 9))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["max_cost"] as? Double, 9)
+    }
+
+    func testDecodesSearchInfo() throws {
+        let json = """
+        {"search": {"max_cost": 16, "reached": 7, "depth": 5},
+         "words": [], "connections": [], "semantic": [], "nodes": {}}
+        """
+        let r = try JSONDecoder().decode(SceneResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(r.search, SearchInfo(maxCost: 16, reached: 7, depth: 5))
+        XCTAssertEqual(r.showing(.meanings).search, r.search)
+    }
+
+    func testCurrentDefaultsAndClamps() {
+        UserDefaults.standard.removeObject(forKey: SearchDepth.storageKey)
+        XCTAssertEqual(SearchDepth.current, SearchDepth.defaultValue)
+        UserDefaults.standard.set(500.0, forKey: SearchDepth.storageKey)
+        XCTAssertEqual(SearchDepth.current, SearchDepth.range.upperBound)
+    }
+}

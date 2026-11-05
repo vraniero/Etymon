@@ -225,10 +225,11 @@ private struct AncestorBubble: View {
             Text(node?.word ?? "?")
                 .font(.subheadline.bold()).italic(node?.reconstructed ?? false)
             Text(node?.language ?? "")
-                .font(.system(size: 9)).foregroundStyle(.secondary)
+                .font(.system(size: 9)).foregroundStyle(Color.black.opacity(0.6))
             if let meaning {
                 Text("= \(meaning)")
-                    .font(.caption2.weight(.semibold)).foregroundStyle(.green)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color(red: 0.0, green: 0.5, blue: 0.2))  // readable on yellow
             }
         }
         .lineLimit(1)

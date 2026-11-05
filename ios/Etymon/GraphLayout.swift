@@ -29,7 +29,7 @@ struct GraphLayout {
     private(set) var maxLevel = 0
     private(set) var width: CGFloat = 1
 
-    static let minSpacing: CGFloat = 1
+    static let minSpacing: CGFloat = 1.25  // ancestor boxes are wider than a slot
 
     /// compact: draw each scene word straight to its meeting points (the common
     /// denominators); the full chains are in the detail sheet. Otherwise every step.

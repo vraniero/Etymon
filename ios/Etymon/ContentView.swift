@@ -25,7 +25,11 @@ struct ContentView: View {
         ?? (CameraScanner.isAvailable ? .camera : .type)
     @State private var selection: Selection?
     @State private var showSettings = false
+    @State private var showHelp = false
     @State private var fullPaths = false
+    @State private var exploreGraph: ExploreGraph?  // set = Explore is open
+    @AppStorage(NetworkLayers.storageKey) private var layers: NetworkLayers = .both
+    @AppStorage(SearchDepth.storageKey) private var searchDepth = SearchDepth.defaultValue
 
     var body: some View {
         NavigationStack {
@@ -39,23 +43,30 @@ struct ContentView: View {
 
                 switch source {
                 case .camera:
-                    CameraInput(model: model, onSelect: select)
+                    CameraInput(model: model, layers: layers, exploring: exploreGraph != nil,
+                                onSelect: select, onExplore: explore)
                     status
                 case .photo:
-                    PhotoInput(model: model, onSelect: select)
+                    PhotoInput(model: model, layers: layers, onSelect: select)
                     status
                 case .type:
                     TypeInput(model: model).frame(height: 130)
                     status
+                    if model.response != nil { layersPicker }
                     graph
                 }
             }
             .navigationTitle("Etymon")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: searchDepth) { model.refresh() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Clear", systemImage: "trash") { model.reset() }
                         .disabled(model.words.isEmpty)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Help", systemImage: "questionmark.circle") { showHelp = true }
+                        .accessibilityIdentifier("help")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Settings", systemImage: "gear") { showSettings = true }
@@ -73,7 +84,9 @@ struct ContentView: View {
                         WordDetail(text: text, lang: lang)
                     case .graph:
                         VStack(spacing: 0) {
+                            layersPicker
                             Toggle("Full paths", isOn: $fullPaths).padding(.horizontal)
+                                .disabled(!layers.showsRoots)
                             graph
                         }
                         .navigationTitle("Network")
@@ -83,6 +96,10 @@ struct ContentView: View {
                 .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showHelp) { HelpView() }
+            .fullScreenCover(item: $exploreGraph) { graph in
+                ExploreView(graph: graph) { exploreGraph = nil }
+            }
         }
     }
 
@@ -102,7 +119,18 @@ struct ContentView: View {
                      + (model.language.map { " · \($0)" } ?? ""))
             }
             Spacer()
-            if source == .type, model.response?.connections.isEmpty == false {
+            if source != .type, model.response != nil {
+                Menu {
+                    Picker("Show", selection: $layers) {
+                        ForEach(NetworkLayers.allCases) { Text($0.title).tag($0) }
+                    }
+                } label: {
+                    Label(layers.title, systemImage: "square.3.layers.3d")
+                }
+                .controlSize(.mini).buttonStyle(.bordered)
+                .accessibilityIdentifier("layersMenu")
+            }
+            if source == .type, layers.showsRoots, model.response?.connections.isEmpty == false {
                 Toggle("Full paths", isOn: $fullPaths)
                     .toggleStyle(.button).controlSize(.mini)
                     .accessibilityIdentifier("fullPaths")
@@ -113,17 +141,38 @@ struct ContentView: View {
                 .controlSize(.mini).buttonStyle(.bordered)
                 .accessibilityIdentifier("showGraph")
             }
+            if source != .camera, model.response?.words.isEmpty == false {
+                Button("Explore", systemImage: "cube.transparent") { explore() }
+                    .controlSize(.mini).buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("explore")
+            }
         }
         .font(.caption).foregroundStyle(.secondary)
         .padding(.horizontal).padding(.vertical, 6)
     }
 
+    /// Shared roots, same meanings, or both side by side.
+    private var layersPicker: some View {
+        Picker("Show", selection: $layers) {
+            ForEach(NetworkLayers.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal).padding(.vertical, 4)
+        .accessibilityIdentifier("layersPicker")
+    }
+
     @ViewBuilder private var graph: some View {
         if let response = model.response, !response.words.isEmpty {
-            NetworkView(response: response, compact: !fullPaths, onSelect: select)
+            NetworkView(response: response.showing(layers), compact: !fullPaths, onSelect: select)
         } else {
             Spacer()
         }
+    }
+
+    /// Leave the picture for the word network behind it, in 3D.
+    private func explore() {
+        guard let response = model.response else { return }
+        exploreGraph = ExploreGraph(response: response, layers: layers)
     }
 
     private func select(_ key: GraphLayout.Key) {
@@ -149,7 +198,10 @@ struct ContentView: View {
 /// Live video with the network drawn over it, following the words as the camera moves.
 private struct CameraInput: View {
     let model: SceneModel
+    let layers: NetworkLayers
+    let exploring: Bool
     var onSelect: (GraphLayout.Key) -> Void
+    var onExplore: () -> Void
     @State private var scanner = CameraScanner()
     @State private var paused = false
 
@@ -158,15 +210,27 @@ private struct CameraInput: View {
             ZStack(alignment: .bottomTrailing) {
                 CameraPreview(session: scanner.session)
                 if let response = model.response {
-                    OverlayView(response: response, model: model, fill: true, onSelect: onSelect)
+                    OverlayView(response: response.showing(layers), model: model, fill: true,
+                                onSelect: onSelect)
                 }
-                Button(paused ? "Collect" : "Hold", systemImage: paused ? "plus.viewfinder" : "pause.fill") {
-                    paused.toggle()
-                    scanner.isPaused = paused  // still tracks positions, stops adding words
+                HStack {
+                    Button(paused ? "Collect" : "Hold", systemImage: paused ? "plus.viewfinder" : "pause.fill") {
+                        paused.toggle()
+                        scanner.isPaused = paused  // still tracks positions, stops adding words
+                    }
+                    .buttonStyle(.borderedProminent)
+                    // Explore: the video stops, the network behind it opens in 3D
+                    Button("Explore", systemImage: "cube.transparent", action: onExplore)
+                        .buttonStyle(.borderedProminent).tint(.indigo)
+                        .disabled(model.response?.words.isEmpty ?? true)
+                        .accessibilityIdentifier("explore")
                 }
-                .buttonStyle(.borderedProminent).padding(12)
+                .padding(12)
             }
             .clipped()
+            .onChange(of: exploring) { _, isExploring in
+                if isExploring { scanner.stop() } else { scanner.start() }
+            }
             .onAppear {
                 scanner.onFrame = { frame in
                     model.see(frame.recognition, imageSize: frame.imageSize, full: frame.isFull)
@@ -184,6 +248,7 @@ private struct CameraInput: View {
 /// A photo with the network drawn over it.
 private struct PhotoInput: View {
     let model: SceneModel
+    let layers: NetworkLayers
     var onSelect: (GraphLayout.Key) -> Void
     @State private var item: PhotosPickerItem?
     @State private var image: UIImage?
@@ -198,7 +263,8 @@ private struct PhotoInput: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("pickedPhoto")
                 if let response = model.response {
-                    OverlayView(response: response, model: model, fill: false, onSelect: onSelect)
+                    OverlayView(response: response.showing(layers), model: model, fill: false,
+                                onSelect: onSelect)
                 }
             }
             PhotosPicker(selection: $item, matching: .images) {

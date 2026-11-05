@@ -18,6 +18,7 @@ COST = {"inherited": 1.0, "borrowed": 1.0, "learned": 1.0, "calque": 1.2,
         "semantic_loan": 1.5, "derived": 1.0, "component": 1.0, "root": 6.0}
 INFERRED_PENALTY = 0.5
 MAX_COST = 16
+TOP_LANGUAGES = {"ine-pro"}
 
 
 def is_affix(word):
@@ -29,24 +30,33 @@ def is_affix(word):
     return word.startswith("-") or word.endswith("-")
 
 
-def climb(db, starts):
-    """Dijkstra up the source edges from the start ids. Returns {id: (cost, parent, kind)}."""
+def climb(db, starts, max_cost=MAX_COST):
+    """Dijkstra up the source edges from the start ids, no further than max_cost (the
+    search depth). Returns {id: (cost, parent, kind)}."""
     best = {s: (0.0, None, None) for s in starts}
     heap = [(0.0, s) for s in starts]
+    top = set()  # Proto-Indo-European nodes: reached, but not climbed further
     kinds = tuple(COST)
     while heap:
         cost, t = heapq.heappop(heap)
-        if cost > best[t][0] or cost > MAX_COST:
+        if cost > best[t][0] or t in top:
             continue
-        for dst, kind, inferred, word in db.execute(
-                f"SELECT e.dst, e.kind, e.inferred, d.word FROM edge e JOIN term d ON d.id=e.dst "
+        for dst, kind, inferred, word, lang in db.execute(
+                f"SELECT e.dst, e.kind, e.inferred, d.word, d.lang FROM edge e "
+                f"JOIN term d ON d.id=e.dst "
                 f"WHERE e.src=? AND e.kind IN ({','.join('?' * len(kinds))})", (t, *kinds)):
             if is_affix(word):
                 continue
             c = cost + COST[kind] + INFERRED_PENALTY * inferred
+            if c > max_cost:
+                continue
             if dst not in best or c < best[dst][0]:
                 best[dst] = (c, t, kind)
                 heapq.heappush(heap, (c, dst))
+            if lang in TOP_LANGUAGES:
+                # PIE is as far back as the data goes; its entries cite other roots as
+                # loosely related (*upo ... *wert- ... *(s)penh₁-), which is not descent
+                top.add(dst)
     return best
 
 

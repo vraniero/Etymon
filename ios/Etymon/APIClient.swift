@@ -29,13 +29,15 @@ struct APIClient {
         }
     }
 
-    func scene(words: [String], lang: String?) async throws -> SceneResponse {
+    func scene(words: [String], lang: String?,
+               maxCost: Double = SearchDepth.defaultValue) async throws -> SceneResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("scene"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         request.httpBody = try JSONEncoder().encode(
-            SceneRequest(words: words.map { .init(text: $0, lang: nil) }, lang: lang))
+            SceneRequest(words: words.map { .init(text: $0, lang: nil) }, lang: lang,
+                         maxCost: maxCost))
         return try await send(request)
     }
 
@@ -44,6 +46,16 @@ struct APIClient {
                                        resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "text", value: text)]
             + (lang.map { [URLQueryItem(name: "lang", value: $0)] } ?? [])
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 10
+        return try await send(request)
+    }
+
+    func neighbors(of id: Int, children: Int = 16) async throws -> NeighborsResponse {
+        var components = URLComponents(url: baseURL.appendingPathComponent("neighbors"),
+                                       resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "id", value: String(id)),
+                                 URLQueryItem(name: "children", value: String(children))]
         var request = URLRequest(url: components.url!)
         request.timeoutInterval = 10
         return try await send(request)

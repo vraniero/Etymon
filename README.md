@@ -54,6 +54,7 @@ python3 -m venv .venv
     "Old Church Slavonic" Sanskrit
 .venv/bin/python build_graph.py
 .venv/bin/python build_meanings.py
+.venv/bin/python geo.py        # where each language was spoken, for the map view
 ```
 
 Downloading takes from under an hour to a few hours depending on kaikki.org's speed
@@ -89,7 +90,19 @@ Check it: `curl localhost:8000/health` → `{"ok":true,...}`; interactive API do
 <http://localhost:8000/docs>.
 
 **The terminal is a live monitor**: each scene the phone or simulator sends, and each
-word tapped, is printed as it happens — see [Backend monitor](#backend-monitor).
+word tapped, is printed as it happens — see [Backend monitor](#backend-monitor). To keep
+that output in a file, or run the backend in the background, see
+[Backend logs](#backend-logs).
+
+**Stop it:**
+
+- Started in a terminal window: press **Ctrl+C** there. It finishes the request in
+  progress and exits (`Application shutdown complete.`).
+- Started in the background, or you've lost the window: `pkill -f "uvicorn app:app"`.
+  If that finds nothing but port 8000 is still taken, stop whatever holds the port:
+  `kill $(lsof -ti tcp:8000)`.
+- Check it's down: `curl localhost:8000/health` → *Connection refused*. Check what's still
+  running: `pgrep -fl "uvicorn app:app"` (no output = nothing running).
 
 ### 3. Run the app in the simulator
 
@@ -201,8 +214,8 @@ of the `xcodebuild` command.
 
 ### Stopping and troubleshooting
 
-- **Stop the backend**: Ctrl+C in its terminal, or `pkill -f "uvicorn app:app"`.
-  Check it is down: `curl localhost:8000/health` → *Connection refused*.
+- **Stop the backend**: Ctrl+C in its terminal, or `pkill -f "uvicorn app:app"` — see
+  [Stop it](#2-run-the-backend).
 - **"Address already in use"** when starting the backend: one is already running on
   port 8000 — use it, or stop it with `kill $(lsof -ti tcp:8000)`.
 - **Error banner in the app / nothing connects**: the backend isn't running, or the server
@@ -232,15 +245,84 @@ of the `xcodebuild` command.
 SwiftUI, iOS 17+, in `ios/`. The Xcode project is generated from `ios/project.yml` by
 XcodeGen and is not checked in. Setup and running: see [Getting started](#getting-started).
 
-The network is drawn **over the picture and the live video**, anchored to the words: each
-word is outlined where it is, shared ancestors float above the words they join (solid
-curves), and words with the same meaning are joined by dashed arcs ("= open"). The camera
-reads the frame carefully about once a second (new words, language) and quickly ~10 times a
-second in between to re-locate known words, so the overlay moves with the video; words that
-leave the frame fade out. **Hold** keeps the current words while still tracking them.
-**Graph** shows the same network as a diagram (the default view for typed words); **Full
-paths** shows every step; tapping an ancestor opens both chains and the deeper line to the
-root, tapping a word its own lineage.
+The same guide is in the app: tap **?** in the toolbar.
+
+### Using the app
+
+**Modes** (the switch at the top):
+
+- **Camera** — point the phone at text. The network is drawn over the live video,
+  anchored to the words, and follows them as you move.
+- **Photo** — pick a picture with text; the network is drawn over it.
+- **Type** — type or paste words and press **Connect**; the network is shown as a graph.
+
+**Reading the overlay:**
+
+| you see | it means |
+|---|---|
+| yellow outline on a word | the word is connected to another word in the scene |
+| thin white outline | the word was read but isn't connected to anything (yet) |
+| yellow bubble above words, solid yellow lines | **shared root**: the words descend from this ancestor (e.g. *notte* and *night* from Proto-Indo-European *\*nókʷts*); italic with `*` = reconstructed, never written down |
+| `= night` inside a bubble | the words share the root **and** mean the same |
+| green dashed arc with `= open` | **same meaning** in different languages, without a shared root (*Aperta* = *Open*) |
+
+**Collecting words in the camera — Hold and Collect.** These are one button that
+switches between two modes; the label is the action it will take:
+
+- **Normal (button reads *Hold*)** — the app keeps collecting. About once a second it
+  reads the frame carefully and **adds new words** to the scene, up to 20 (past that the
+  oldest drop off), then asks for the network again. Pan across a street and words from
+  different signs accumulate and connect to each other.
+- **Held (button reads *Collect*)** — the scene is **frozen**: no new words are added and
+  the network stays as it is, but the collected words are still **tracked** — outlines,
+  bubbles and arcs keep following them as you move, ~10 times a second. Words that leave
+  the frame fade out and come back when you point at them again. Use it when you've found
+  an interesting set of words and don't want new text crowding them out.
+- Tap **Collect** to go back to normal and add new words again.
+
+**Explore — the word network behind the picture, in 3D.** The **Explore** button
+(next to Hold/Collect in the camera; in the status line for photo and type) stops the
+video and opens the scene's network as a 3D space:
+
+- The words that were seen sit at the bottom (blue); their ancestors rise above them,
+  the older the higher (yellow; stronger yellow = shared roots); words brought in by
+  Expand are grey. Yellow links are descent, orange borrowing, green same meaning.
+- **Move around**: drag to turn, pinch to zoom, two fingers to move.
+- **Move a word**: press and hold it, then drag; it stays where it is put and its links
+  follow.
+- **Jump**: tap a word — the camera flies to it and the panel shows its language, its
+  meaning, what it **comes from**, what it **gave** and what has the **same meaning**.
+  Tap any of those to jump on, from word to word.
+- **Expand**: bring in the word's own parents and descendants from the dictionary,
+  beyond the scene (Latin *pater* adds German *Pater*, English *Paternoster*, Spanish
+  *padrastro*…), and keep exploring from there. **Lineage** shows its full ancestry.
+- **Back** returns to the camera, and the video resumes.
+
+The backend serves Expand with `GET /neighbors?id=<node>` (parents and up to 16
+children, modern and common words first); the monitor prints an `explore` line for each.
+
+**Other controls:**
+
+- **Trash** (top left) — clear the scene and start fresh.
+- **Graph** (bottom right, camera and photo) — the same network as a diagram.
+- **Both · Roots · Meanings** — what the network shows: shared roots (etymological
+  connections), same meanings (semantic connections), or both side by side. The switch
+  sits above the graph; in camera and photo it is the layers menu at the bottom right,
+  and the overlay follows the same choice. The choice is remembered.
+- **Full paths** (graph) — show every step of each chain instead of just the shared
+  ancestor.
+- **Tap a bubble** — how the two words reach their shared ancestor, step by step, and the
+  deeper line above it to the oldest known root.
+- **Tap a word** — that word's own lineage.
+- **Gear** (top right) — the backend address (simulator: `http://localhost:8000`; phone:
+  `http://<Mac address>:8000`).
+- **?** — this guide.
+
+The status line at the bottom counts the words, shared roots and same-meaning links, and
+shows the scene's detected language.
+
+Under the hood the camera reads the frame carefully about once a second (new words,
+language) and quickly ~10 times a second in between to re-locate known words.
 
 ## Backend
 
@@ -309,12 +391,52 @@ Options:
 - Leave out `--no-access-log` to also print uvicorn's raw line per request, with the
   client's IP address and HTTP status — useful to tell several devices apart:
   `INFO:  192.168.178.76:56180 - "POST /scene HTTP/1.1" 200 OK`
-- `NO_COLOR=1` before the command prints plain text (no colours), e.g. when saving to a file.
-- Save a session while still watching it:
-  `.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log 2>&1 | tee monitor.log`
-- If the backend was started somewhere you can't see (in the background, by a script),
-  its output goes wherever it was redirected; follow that file with `tail -f <file>`.
-  Ctrl+C in a `tail` window closes only the view, not the server.
+- `NO_COLOR=1` before the command prints plain text (no colours) in the terminal too.
+
+### Backend logs
+
+The backend's log is its terminal output: the monitor blocks above, plus uvicorn's
+startup and shutdown lines and any errors (with Python tracebacks). Nothing is written to
+disk unless you send it there. All of it goes to the terminal's error stream, which is
+why the commands below use `2>&1`. When the output goes to a file, colours are turned off
+automatically.
+
+**Watch and save at the same time** (the backend runs in this window; Ctrl+C stops it):
+
+```sh
+cd backend
+.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log 2>&1 | tee -a backend.log
+```
+
+**Run it in the background** and keep the log in a file, so the terminal is free:
+
+```sh
+cd backend
+nohup .venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log \
+  >> backend.log 2>&1 &
+```
+
+It keeps running after the terminal is closed; stop it with
+`pkill -f "uvicorn app:app"` (see [Stop it](#2-run-the-backend)).
+
+**Read the log:**
+
+| to | run (in `backend/`) |
+|---|---|
+| follow it live | `tail -f backend.log` — Ctrl+C closes only the view, not the server |
+| see the last 50 lines | `tail -n 50 backend.log` |
+| find errors | `grep -n -A20 Traceback backend.log` |
+| find a word's scenes | `grep -n -A8 "padre" backend.log` |
+| start a fresh log | `: > backend.log` (empties it; the server keeps writing) |
+
+`-a` / `>>` append, so each session adds to the same file; the timestamps at the start of
+each line tell sessions apart. Log files are ignored by git (`*.log`).
+
+**The app's side.** The iOS app doesn't write a log of its own; what it sends is exactly
+what the backend logs. A request that fails shows as the red error banner in the app, and
+the system messages (crashes, network refusals) are in Xcode's debug console (⇧⌘C) when
+running from Xcode. From the terminal, for the simulator:
+`xcrun simctl spawn booted log stream --predicate 'process == "Etymon"'`.
 
 ## Data pipeline
 
@@ -332,6 +454,7 @@ Steps: see [Getting started](#getting-started). The scripts:
 | `fetch.py <Language>...` | downloads kaikki.org dumps and keeps the fields the graph needs |
 | `build_graph.py` | builds `data/etymon.sqlite` from the slimmed dumps |
 | `build_meanings.py` | adds same-meaning links (`meaning` table) |
+| `geo.py` | places each language on the map (`language_geo` table): Glottolog points, hand-placed proto-language homelands; rerun after `build_graph.py` |
 | `query.py it padri` | explore one word |
 | `connect.py it padre en paternalistic` | what two words have in common |
 | `export_mobile.py` | a pruned, app-sized copy of the graph (for a future offline mode) |

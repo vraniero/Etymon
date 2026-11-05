@@ -1,6 +1,7 @@
 """Etymon API: the words seen in a scene in, the network of shared ancestry out.
 
-    POST /scene   {"words": [{"text": "padre", "lang": "it"}, {"text": "paternalistic"}]}
+    POST /scene   {"words": [{"text": "padre", "lang": "it"}, {"text": "paternalistic"}],
+                   "max_cost": 16}   (search depth, optional)
                   -> etymological connections (shared ancestors) and semantic links
                      (same meaning across languages: aperta = open)
     GET  /word?text=padri&lang=it
@@ -22,11 +23,12 @@ from pydantic import BaseModel, Field
 
 PIPELINE = Path(__file__).resolve().parent.parent / "pipeline"
 sys.path.insert(0, str(PIPELINE))
-from connect import climb, lineage, meetings  # noqa: E402
+from connect import MAX_COST, climb, is_affix, lineage, meetings  # noqa: E402
 from query import MODERN, resolve  # noqa: E402
 
 DB_PATH = Path(os.environ.get("ETYMON_DB", PIPELINE / "data" / "etymon.sqlite"))
 MAX_WORDS = 30
+MAX_SEARCH_DEPTH = 40
 PUNCT = " \t\n.,;:!?¡¿\"'“”‘’«»()[]{}"
 
 app = FastAPI(title="Etymon", version="0.1")
@@ -49,7 +51,8 @@ def _c(code, text):
 def log_scene(body, words, connections, semantic, nodes, ms):
     roots, same = len(connections), len(semantic)
     lines = [f"{_c('1;36', 'scene')}  {body.lang or '--'}  {len(words)} words · "
-             f"{_c('33', f'{roots} shared roots')} · {_c('32', f'{same} same meaning')} · {ms:.0f} ms"]
+             f"{_c('33', f'{roots} shared roots')} · {_c('32', f'{same} same meaning')} · "
+             f"depth {body.max_cost:g} · {ms:.0f} ms"]
     width = max([len(f"{words[c.a].text} ↔ {words[c.b].text}") for c in connections] + [0])
     for c in connections:
         pair = f"{words[c.a].text} ↔ {words[c.b].text}"
@@ -87,6 +90,9 @@ class SceneIn(BaseModel):
     lang: str | None = Field(None, description="likely language of the whole scene, tried "
                                                "first for words without their own lang")
     connections_per_pair: int = Field(1, ge=1, le=3)
+    max_cost: float = Field(MAX_COST, ge=1, le=MAX_SEARCH_DEPTH,
+                            description="search depth: how far up each word's ancestry to "
+                                        "climb, in edge costs (most links cost 1, a root 6)")
 
 
 class Step(BaseModel):
@@ -98,7 +104,8 @@ class Connection(BaseModel):
     a: int  # index into words
     b: int
     meet: int  # node id of the nearest shared ancestor
-    distance: float
+    distance: float  # cost of both paths together
+    depth: float  # cost of the longer of the two paths: the search depth this connection needs
     path_a: list[Step]  # word a ... meet
     path_b: list[Step]  # word b ... meet
     deeper: list[Step]  # meet ... oldest known ancestor / reconstructed root
@@ -117,6 +124,8 @@ class Node(BaseModel):
     word: str
     gloss: str | None
     reconstructed: bool
+    lat: float | None = None  # where the language was spoken (pipeline/geo.py); None if unknown
+    lon: float | None = None
 
 
 class WordOut(BaseModel):
@@ -126,7 +135,14 @@ class WordOut(BaseModel):
     meanings: list[str] = []  # English meaning keys (empty if unknown)
 
 
+class Search(BaseModel):
+    max_cost: float  # the search depth asked for
+    reached: float  # how far up the deepest climb actually got (<= max_cost)
+    depth: float  # depth of the deepest connection found (0 if none)
+
+
 class SceneOut(BaseModel):
+    search: Search
     words: list[WordOut]
     connections: list[Connection]  # shared etymological ancestry
     semantic: list[SemanticLink]  # same meaning, different languages
@@ -184,7 +200,11 @@ def meanings_for(db, ids):
 
 
 def has_meanings(db):
-    return db.execute("SELECT 1 FROM sqlite_master WHERE name='meaning'").fetchone() is not None
+    return has_table(db, "meaning")
+
+
+def has_table(db, name):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (name,)).fetchone() is not None
 
 
 def semantic_links(words):
@@ -202,13 +222,17 @@ def semantic_links(words):
 def nodes_for(db, ids):
     if not ids:
         return {}
+    geo = has_table(db, "language_geo")
     rows = db.execute(
-        f"SELECT t.id, t.lang, coalesce(l.name, t.lang), t.word, t.gloss FROM term t "
-        f"LEFT JOIN language l ON l.code=t.lang WHERE t.id IN ({','.join('?' * len(ids))})",
+        f"SELECT t.id, t.lang, coalesce(l.name, t.lang), t.word, t.gloss, "
+        f"{'g.lat, g.lon' if geo else 'NULL, NULL'} FROM term t "
+        f"LEFT JOIN language l ON l.code=t.lang "
+        f"{'LEFT JOIN language_geo g ON g.code=t.lang ' if geo else ''}"
+        f"WHERE t.id IN ({','.join('?' * len(ids))})",
         list(ids))
     return {i: Node(id=i, lang=lang, language=name, word=word, gloss=gloss,
-                    reconstructed=word.startswith("*"))
-            for i, lang, name, word, gloss in rows}
+                    reconstructed=word.startswith("*"), lat=lat, lon=lon)
+            for i, lang, name, word, gloss, lat, lon in rows}
 
 
 def steps(p):
@@ -234,7 +258,7 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
         seen.add(key)
         lang, ids = best_language(db, text, w.lang, hint=body.lang)
         words.append(WordOut(text=text, lang=lang, terms=ids, meanings=meanings_for(db, ids)))
-        trees.append(climb(db, ids) if ids else {})
+        trees.append(climb(db, ids, body.max_cost) if ids else {})
 
     connections, used = [], set()
     for (i, ta), (j, tb) in combinations(enumerate(trees), 2):
@@ -243,6 +267,7 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
         for distance, meet, pa, pb in meetings(ta, tb, body.connections_per_pair):
             deeper = lineage(db, meet)
             connections.append(Connection(a=i, b=j, meet=meet, distance=distance,
+                                          depth=max(ta[meet][0], tb[meet][0]),
                                           path_a=steps(pa), path_b=steps(pb),
                                           deeper=steps(deeper)))
             used.update(n for n, _ in pa + pb + deeper)
@@ -251,7 +276,11 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
     semantic = semantic_links(words)
     nodes = nodes_for(db, used)
     log_scene(body, words, connections, semantic, nodes, (time.perf_counter() - started) * 1000)
-    return SceneOut(words=words, connections=connections, semantic=semantic, nodes=nodes)
+    search = Search(max_cost=body.max_cost,
+                    reached=max((c for t in trees for c, _, _ in t.values()), default=0.0),
+                    depth=max((c.depth for c in connections), default=0.0))
+    return SceneOut(search=search, words=words, connections=connections, semantic=semantic,
+                    nodes=nodes)
 
 
 @app.get("/word")
@@ -271,3 +300,40 @@ def word(text: str, lang: str | None = Query(None), db: sqlite3.Connection = Dep
     log.info(f"{_c('1;35', 'word ')}  {text} ({lang})  {_c('2', chain)}")
     return {"text": text, "lang": lang, "meanings": meanings_for(db, ids), "entries": out,
             "nodes": nodes}
+
+
+# ---------- explore ----------
+
+DESCENT = ("inherited", "borrowed", "learned", "calque", "semantic_loan", "derived",
+           "component", "root")
+
+
+@app.get("/neighbors")
+def neighbors(id: int, children: int = Query(16, ge=0, le=60),
+              db: sqlite3.Connection = Depends(get_db)):
+    """A node's immediate network, for exploring: where it comes from (parents) and what
+    came from it (children; modern, common words first). Expanding pater gives padre,
+    père, paternal, Pater... and from any of those one can keep going."""
+    if not db.execute("SELECT 1 FROM term WHERE id=?", (id,)).fetchone():
+        raise HTTPException(404, "node not found")
+    marks = ",".join("?" * len(DESCENT))
+    parents = [Step(node=d, kind=k) for d, k, w in db.execute(
+        f"SELECT e.dst, e.kind, t.word FROM edge e JOIN term t ON t.id=e.dst "
+        f"WHERE e.src=? AND e.kind IN ({marks}) ORDER BY e.inferred, "
+        f"instr('inherited borrowed learned calque semantic_loan derived component root', e.kind)",
+        (id, *DESCENT)) if not is_affix(w)][:10]
+    modern = ",".join(f"'{m}'" for m in MODERN)
+    kids = [Step(node=s_, kind=k) for s_, k, w in db.execute(
+        f"SELECT e.src, e.kind, t.word FROM edge e JOIN term t ON t.id=e.src "
+        f"WHERE e.dst=? AND e.kind IN ({marks}) "
+        f"ORDER BY (t.lang IN ({modern})) DESC, coalesce(t.zipf, 0) DESC, t.has_entry DESC, e.inferred "
+        f"LIMIT ?", (id, *DESCENT, children * 3)) if not is_affix(w)][:children]
+    used = {id} | {p.node for p in parents} | {c.node for c in kids}
+    nodes = nodes_for(db, used)
+    total = db.execute(f"SELECT count(*) FROM edge WHERE dst=? AND kind IN ({marks})",
+                       (id, *DESCENT)).fetchone()[0]
+    n = nodes.get(id)
+    log.info(f"{_c('1;34', 'explore')}  {n.word if n else id} ({n.language if n else '?'})  "
+             f"{len(parents)} parents · {len(kids)} of {total} children")
+    return {"node": id, "parents": parents, "children": kids, "total_children": total,
+            "meanings": meanings_for(db, [id]), "nodes": nodes}

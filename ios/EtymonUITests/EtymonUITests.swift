@@ -65,10 +65,100 @@ final class EtymonUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["= open"].exists)
         shot("5-typed-graph")
 
+        // roots and meanings can be shown separately or together
+        let picker = app.descendants(matching: .any)["layersPicker"]
+        picker.buttons["Roots"].tap()
+        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["= open"].exists, "Roots view shows no meaning links")
+        shot("8-roots-only")
+        picker.buttons["Meanings"].tap()
+        XCTAssertTrue(app.staticTexts["= open"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["pater"].exists, "Meanings view shows no ancestors")
+        shot("9-meanings-only")
+        picker.buttons["Both"].tap()
+        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
+
+        // the help screen explains the controls
+        app.descendants(matching: .any)["help"].tap()
+        XCTAssertTrue(app.navigationBars["How it works"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Type or paste words and press Connect; the network is shown as a graph."].exists)
+        shot("7-help")
+        app.navigationBars["How it works"].buttons["Done"].tap()
+
         let fullPaths = app.descendants(matching: .any)["fullPaths"]
         fullPaths.tap()
         sleep(1)
         shot("6-typed-full-paths")
+    }
+
+    func testMapJourney() {
+        let app = XCUIApplication()
+        // the argument shows the map without changing the remembered Tree/Map choice
+        app.launchArguments = ["-source", "type", "-demo", "-networkStyle", "map"]
+        app.launch()
+        let follow = app.descendants(matching: .any)["journeyMenu"].firstMatch
+        XCTAssertTrue(follow.waitForExistence(timeout: 15))
+        sleep(2)
+        shot("13-map")
+
+        // follow padre from Italy back to its Proto-Indo-European root
+        follow.tap()
+        app.buttons["padre"].firstMatch.tap()
+        let card = app.buttons["journeyClose"]
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The word you saw"].exists)
+        sleep(2)
+        shot("14-journey-leaf")
+        let forward = app.buttons["journeyForward"]
+        forward.tap()
+        XCTAssertTrue(app.staticTexts["patre"].waitForExistence(timeout: 5))
+        forward.tap()
+        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
+        sleep(2)
+        shot("15-journey-latin")
+        while forward.isEnabled { forward.tap() }
+        XCTAssertTrue(app.staticTexts["Oldest known root"].waitForExistence(timeout: 5))
+        sleep(2)
+        shot("16-journey-root")
+        app.buttons["journeyBack"].tap()
+        XCTAssertFalse(app.staticTexts["Oldest known root"].exists)
+
+        app.buttons["journeyClose"].tap()
+        XCTAssertFalse(card.waitForExistence(timeout: 2))
+        XCTAssertTrue(follow.exists)
+    }
+
+    func testExploreIn3D() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-source", "type", "-demo"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 15))
+
+        app.descendants(matching: .any)["explore"].firstMatch.tap()
+        let opened = app.buttons["closeExplore"].waitForExistence(timeout: 5)
+        sleep(3)  // let the layout settle
+        shot("10-explore-3d")
+        XCTAssertTrue(opened, "Explore did not open")
+
+        // jump to a word seen in the scene, then expand it
+        app.buttons["jump-padre"].tap()
+        XCTAssertTrue(app.staticTexts["exploreSelected"].waitForExistence(timeout: 5))
+        sleep(1)
+        shot("11-explore-selected")
+        // padre comes from Old Italian patre, which comes from Latin pater
+        app.buttons["jump-patre"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["jump-pater"].waitForExistence(timeout: 5))
+        app.buttons["jump-pater"].firstMatch.tap()
+        let expand = app.buttons["expandNode"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        XCTAssertTrue(app.buttons["jump-Pater"].waitForExistence(timeout: 10),
+                      "expanding pater brings in its descendants (German Pater)")
+        sleep(3)
+        shot("12-explore-expanded")
+
+        app.buttons["closeExplore"].tap()
+        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
     }
 
     private func dismissSheet(_ app: XCUIApplication) {

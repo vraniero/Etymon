@@ -26,9 +26,11 @@ Everything runs locally on a Mac: the **pipeline** builds the etymology database
 
 ### Prerequisites
 
-- macOS with **Xcode 16 or later** (from the App Store), opened once so it installs its
-  components, and selected as the active developer directory:
-  `sudo xcode-select -s /Applications/Xcode.app`
+- macOS with **Xcode** (from the App Store), opened once so it installs its components,
+  and selected as the active developer directory:
+  `sudo xcode-select -s /Applications/Xcode.app`. To run on an iPhone, Xcode must
+  support the **phone's iOS version** (an iPhone on iOS 27 needs Xcode 27) — check with
+  `xcodebuild -showsdks`.
 - An iOS simulator runtime: Xcode → Settings → Components (the steps below use
   *iPhone 17*; any recent iPhone simulator works — list them with
   `xcrun simctl list devices available`)
@@ -65,17 +67,29 @@ fetched are skipped. `build_graph.py` takes about 10 minutes. The result is
 
 ### 2. Run the backend
 
-In its own terminal (leave it running; **Ctrl+C** stops it):
+Set it up once:
 
 ```sh
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install fastapi uvicorn httpx pytest
-.venv/bin/uvicorn app:app --port 8000
 ```
+
+Then run it in its own terminal window and leave it running (**Ctrl+C** stops it):
+
+```sh
+cd backend
+.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log
+```
+
+`--host 0.0.0.0` makes it reachable from an iPhone on the same Wi-Fi (for the simulator
+alone, `localhost` is enough); `--no-access-log` leaves just the monitor output.
 
 Check it: `curl localhost:8000/health` → `{"ok":true,...}`; interactive API docs at
 <http://localhost:8000/docs>.
+
+**The terminal is a live monitor**: each scene the phone or simulator sends, and each
+word tapped, is printed as it happens — see [Backend monitor](#backend-monitor).
 
 ### 3. Run the app in the simulator
 
@@ -106,27 +120,70 @@ The simulator has no camera, so use **Photo** or **Type**:
   `xcrun simctl addmedia "iPhone 17" ios/EtymonUITests/sign.png` (a sample pharmacy sign).
 - **Type** — edit the words and press **Connect**.
 
-Launch arguments, for demos (Xcode: Product → Scheme → Edit Scheme → Run → Arguments):
-`-demo` connects the sample typed words at launch; `-source photo -photo <path>` opens a
-photo file directly.
+Launch arguments (Xcode: Product → Scheme → Edit Scheme → Run → Arguments):
+
+| argument | does |
+|---|---|
+| `-demo` | connects the sample typed words at launch |
+| `-source camera\|photo\|type` | opens in that mode |
+| `-photo <path>` | reads an image file as if it had been picked (with `-source photo`) |
+| `-api <url>` | backend address, remembered for later launches (e.g. the Mac's address on a phone) |
 
 ### 4. Run the app on an iPhone
 
-The live camera overlay only works on a real device.
+The live camera overlay only works on a real device. One-time setup first, then the
+everyday run.
 
-1. Connect the iPhone by cable (or same Wi-Fi with pairing set up) and enable
-   **Developer Mode** on it (Settings → Privacy & Security).
-2. In Xcode select the **Etymon** target → **Signing & Capabilities**, tick *Automatically
-   manage signing* and pick your **Team** (a free Apple ID works). If the bundle id is
-   taken, change `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` and rerun
-   `xcodegen generate`.
-3. Start the backend so the phone can reach it over the network:
-   `.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000`
-4. Choose the iPhone as the run destination and press **⌘R**. On first launch allow
-   camera and local-network access.
-5. In the app's **Settings** (gear), set the server to your Mac's address, e.g.
-   `http://192.168.1.20:8000` (find it with `ipconfig getifaddr en0`). Phone and Mac must
-   be on the same network.
+**One-time setup**
+
+1. **Pair the phone with the Mac.** Connect it by cable, unlock it, and tap **Trust** on
+   *"Trust This Computer?"*. If no prompt appears, start pairing from the Mac:
+   `xcrun devicectl list devices` (note the phone's identifier), then
+   `xcrun devicectl manage pair --device <identifier>`.
+2. **Turn on Developer Mode** on the phone: Settings → Privacy & Security → scroll to the
+   very bottom → **Developer Mode** → on → Restart → **Turn On**. The switch only appears
+   after the phone has been paired with a Mac running Xcode; if it is still missing,
+   open Xcode → Window → Devices and Simulators with the phone connected.
+3. **Add your Apple ID to Xcode** (a free one works): Xcode → Settings → Accounts → **+**
+   → Apple ID; then select it → **Manage Certificates… → + → Apple Development**.
+4. **Set your team** in `ios/project.yml` (`DEVELOPMENT_TEAM`, currently the personal
+   team `9P2NQ693B3`) and run `xcodegen generate`. Find your team id under Xcode →
+   Settings → Accounts, or in Xcode: Etymon target → Signing & Capabilities → Team. If
+   the bundle id is taken, change `PRODUCT_BUNDLE_IDENTIFIER` there too.
+5. **Install once and trust the developer**: build and install (below). The first launch
+   is refused until you allow it on the phone: Settings → General → **VPN & Device
+   Management** → *Apple Development: your Apple ID* → **Trust**.
+6. On first launch allow **camera** and **local network** access (without local network
+   the app cannot reach the Mac).
+
+**Every time**
+
+1. Start the backend for the network (step 2): `--host 0.0.0.0`.
+2. Phone and Mac on the **same Wi-Fi**. Find the Mac's address with
+   `ipconfig getifaddr en0` (e.g. `192.168.178.133`).
+3. Run the app:
+   - **From Xcode**: choose the iPhone as the run destination, **⌘R**. Then in the app's
+     **Settings** (gear) set the server to `http://<Mac address>:8000`.
+   - **From the terminal** (passes the server address at launch; the app remembers it):
+
+     ```sh
+     cd ios
+     xcodegen generate
+     xcrun devicectl list devices            # the phone's identifier
+     xcodebuild -project Etymon.xcodeproj -scheme Etymon -destination 'id=<identifier>' \
+       -derivedDataPath build-device -allowProvisioningUpdates build
+     xcrun devicectl device install app --device <identifier> \
+       build-device/Build/Products/Debug-iphoneos/Etymon.app
+     xcrun devicectl device process launch --device <identifier> --terminate-existing \
+       com.ranierovirgilio.etymon -api http://<Mac address>:8000 -source camera
+     ```
+4. Point the camera at text: outlines appear on the words, shared roots float above them,
+   same-meaning words are joined by dashed arcs, and the backend terminal prints each
+   scene. **Hold** keeps the collected words while still tracking them.
+
+If several Xcode versions are installed (e.g. a newer one not yet moved to
+Applications), point the terminal commands at the right one without changing the system
+default: `export DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer`.
 
 ### 5. Run the tests
 
@@ -145,6 +202,7 @@ of the `xcodebuild` command.
 ### Stopping and troubleshooting
 
 - **Stop the backend**: Ctrl+C in its terminal, or `pkill -f "uvicorn app:app"`.
+  Check it is down: `curl localhost:8000/health` → *Connection refused*.
 - **"Address already in use"** when starting the backend: one is already running on
   port 8000 — use it, or stop it with `kill $(lsof -ti tcp:8000)`.
 - **Error banner in the app / nothing connects**: the backend isn't running, or the server
@@ -154,6 +212,20 @@ of the `xcodebuild` command.
 - **`xcodebuild` requires Xcode** / no iOS SDK: run the `xcode-select` command above.
 - **Unable to find destination "iPhone 17"**: use a simulator you have, from
   `xcrun simctl list devices available`.
+- **"The developer disk image could not be mounted"** when building for the phone: the
+  phone's iOS is newer than Xcode supports — install a newer Xcode (and use it via
+  `xcode-select` or `DEVELOPER_DIR`).
+- **Phone shows *unpaired*** in `xcrun devicectl list devices`, or Developer Mode is
+  missing in Settings: pair it (iPhone setup, step 1).
+- **"invalid code signature … profile has not been explicitly trusted"** on launch:
+  trust the developer on the phone (iPhone setup, step 5).
+- **No signing certificate / no team**: add the Apple ID and an Apple Development
+  certificate in Xcode (iPhone setup, step 3).
+- **The phone can't reach the backend** (error banner, nothing in the monitor): same
+  Wi-Fi for both; backend started with `--host 0.0.0.0`; local-network access allowed
+  (phone Settings → Privacy & Security → Local Network → Etymon); server address in the
+  app's Settings is the Mac's current IP (it can change after a restart or network
+  switch). Test from the Mac: `curl http://<Mac address>:8000/health`.
 
 ## iOS app
 
@@ -187,6 +259,62 @@ meeting point (*pater*), both paths to it, and the `deeper` chain above it
 (*\*patēr* → *\*ph₂tḗr* → root *\*peh₂-*), plus a `nodes` table for labels.
 `GET /word?text=padri&lang=it` gives one word's lineage. `ETYMON_DB` points at the database
 (default `pipeline/data/etymon.sqlite`).
+
+### Backend monitor
+
+The terminal running the backend doubles as a live monitor of what the app is doing.
+Start the backend in a terminal window you keep visible:
+
+```sh
+cd backend
+.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log
+```
+
+Each request the app makes prints one readable block:
+
+```
+15:56:30  scene  it  7 words · 2 shared roots · 3 same meaning · 53 ms
+          FARMACIA ↔ Pharmacy  → pharmacia (Medieval Latin)
+          notte ↔ night        → *nókʷts (Proto-Indo-European)
+          FARMACIA = Pharmacy  (pharmacy)
+          Aperta = Open  (open)
+          notte = night  (night)
+          not connected: Padre
+15:56:30  word   notte (it)  nox → *nok⁽ʷ⁾ts → *nókʷts
+```
+
+| line | meaning |
+|---|---|
+| `scene  it  7 words …` | a scene arrived: the scene's detected language (`--` if unknown), how many words, how many pairs share an ancestor (yellow) or a meaning (green), and how long the backend took |
+| `A ↔ B  → ancestor (language)` | an etymological connection: the two words and their nearest shared ancestor |
+| `A = B  (meaning)` | a semantic connection: different languages, same English meaning |
+| `not connected: …` | words recognised but related to nothing else in the scene |
+| `word   notte (it)  nox → …` | a word was tapped: its lineage up to the oldest known ancestor |
+| `word   xyz  not found` | a tapped word has no entry |
+
+What to look for:
+
+- **Is the app reaching the backend?** With the camera on text, a new `scene` block should
+  appear within a second or two whenever new words come into view. Nothing at all means
+  the phone can't reach the Mac (see [troubleshooting](#stopping-and-troubleshooting)).
+- **Is text recognition reading the right words?** The block lists exactly what the app
+  sent; misread words show up as `not connected`.
+- **Is the language right?** The scene's language decides how ambiguous words are read
+  (*farmacia* as Italian, not Spanish).
+- **Is it fast enough?** Scenes normally take tens of milliseconds; much more means the
+  database is on slow storage or the scene is unusually large (up to 20 words).
+
+Options:
+
+- Leave out `--no-access-log` to also print uvicorn's raw line per request, with the
+  client's IP address and HTTP status — useful to tell several devices apart:
+  `INFO:  192.168.178.76:56180 - "POST /scene HTTP/1.1" 200 OK`
+- `NO_COLOR=1` before the command prints plain text (no colours), e.g. when saving to a file.
+- Save a session while still watching it:
+  `.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log 2>&1 | tee monitor.log`
+- If the backend was started somewhere you can't see (in the background, by a script),
+  its output goes wherever it was redirected; follow that file with `tail -f <file>`.
+  Ctrl+C in a `tail` window closes only the view, not the server.
 
 ## Data pipeline
 

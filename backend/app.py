@@ -9,9 +9,11 @@
 Run: .venv/bin/uvicorn app:app --reload        (from backend/)
 DB:  ETYMON_DB=/path/to/etymon.sqlite          (default: ../pipeline/data/etymon.sqlite)
 """
+import logging
 import os
 import sqlite3
 import sys
+import time
 from itertools import combinations
 from pathlib import Path
 
@@ -28,6 +30,39 @@ MAX_WORDS = 30
 PUNCT = " \t\n.,;:!?¡¿\"'“”‘’«»()[]{}"
 
 app = FastAPI(title="Etymon", version="0.1")
+
+# Monitor: one readable block per scene / word lookup on the server's console.
+log = logging.getLogger("etymon")
+if not log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%H:%M:%S"))
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+_COLOR = sys.stderr.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def _c(code, text):
+    return f"\033[{code}m{text}\033[0m" if _COLOR else text
+
+
+def log_scene(body, words, connections, semantic, nodes, ms):
+    roots, same = len(connections), len(semantic)
+    lines = [f"{_c('1;36', 'scene')}  {body.lang or '--'}  {len(words)} words · "
+             f"{_c('33', f'{roots} shared roots')} · {_c('32', f'{same} same meaning')} · {ms:.0f} ms"]
+    width = max([len(f"{words[c.a].text} ↔ {words[c.b].text}") for c in connections] + [0])
+    for c in connections:
+        pair = f"{words[c.a].text} ↔ {words[c.b].text}"
+        n = nodes.get(c.meet)
+        meet = f"{n.word} ({n.language})" if n else str(c.meet)
+        lines.append(f"          {pair:<{width}}  → {_c('33', meet)}")
+    for l in semantic:
+        lines.append(f"          {words[l.a].text} = {words[l.b].text}  {_c('32', '(' + l.meaning + ')')}")
+    linked = {i for c in connections for i in (c.a, c.b)} | {i for l in semantic for i in (l.a, l.b)}
+    loose = [w.text for i, w in enumerate(words) if i not in linked]
+    if loose:
+        lines.append(_c("2", "          not connected: " + ", ".join(loose)))
+    log.info("\n".join(lines))
 
 
 def get_db():
@@ -189,6 +224,7 @@ def health():
 
 @app.post("/scene", response_model=SceneOut)
 def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
+    started = time.perf_counter()
     words, trees, seen = [], [], set()
     for w in body.words:
         text = normalize(w.text)
@@ -212,8 +248,10 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
             used.update(n for n, _ in pa + pb + deeper)
     connections.sort(key=lambda c: c.distance)
     used.update(t for w in words for t in w.terms)
-    return SceneOut(words=words, connections=connections, semantic=semantic_links(words),
-                    nodes=nodes_for(db, used))
+    semantic = semantic_links(words)
+    nodes = nodes_for(db, used)
+    log_scene(body, words, connections, semantic, nodes, (time.perf_counter() - started) * 1000)
+    return SceneOut(words=words, connections=connections, semantic=semantic, nodes=nodes)
 
 
 @app.get("/word")
@@ -221,11 +259,15 @@ def word(text: str, lang: str | None = Query(None), db: sqlite3.Connection = Dep
     """A single word's lineage, for tapping a word in the scene."""
     lang, ids = best_language(db, normalize(text), lang)
     if not ids:
+        log.info(f"{_c('1;35', 'word ')}  {text}  {_c('2', 'not found')}")
         raise HTTPException(404, "word not found")
     out, used = [], set(ids)
     for tid in ids:
         line = lineage(db, tid)
         used.update(n for n, _ in line)
         out.append({"term": tid, "lineage": steps(line)})
+    nodes = nodes_for(db, used)
+    chain = " → ".join(nodes[n].word for n, _ in lineage(db, ids[0]) if n in nodes)
+    log.info(f"{_c('1;35', 'word ')}  {text} ({lang})  {_c('2', chain)}")
     return {"text": text, "lang": lang, "meanings": meanings_for(db, ids), "entries": out,
-            "nodes": nodes_for(db, used)}
+            "nodes": nodes}

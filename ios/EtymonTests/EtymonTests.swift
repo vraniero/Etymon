@@ -178,3 +178,116 @@ final class SearchDepthTests: XCTestCase {
         XCTAssertEqual(SearchDepth.current, SearchDepth.range.upperBound)
     }
 }
+
+
+@MainActor
+final class WordLimitTests: XCTestCase {
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: WordLimit.storageKey)
+    }
+
+    func testSceneKeepsTheNewestWordsUpToTheLimit() {
+        UserDefaults.standard.set(5, forKey: WordLimit.storageKey)
+        let model = SceneModel()
+        model.add(text: "alpha bravo charlie delta")
+        model.add(text: "echo foxtrot golf")
+        XCTAssertEqual(model.words, ["charlie", "delta", "echo", "foxtrot", "golf"])
+
+        UserDefaults.standard.set(3, forKey: WordLimit.storageKey)  // clamped to 5
+        XCTAssertEqual(WordLimit.current, 5)
+        UserDefaults.standard.set(10, forKey: WordLimit.storageKey)
+        model.add(text: "hotel india")
+        XCTAssertEqual(model.words.count, 7)
+    }
+
+    func testLoweringTheLimitTrimsNow() {
+        UserDefaults.standard.set(10, forKey: WordLimit.storageKey)
+        let model = SceneModel()
+        model.set(typed: "one two three four five six seven eight")
+        XCTAssertEqual(model.words.count, 8)
+        UserDefaults.standard.set(5, forKey: WordLimit.storageKey)
+        model.applyWordLimit()
+        XCTAssertEqual(model.words, ["four", "five", "six", "seven", "eight"])
+    }
+}
+
+
+@MainActor
+final class StableSceneTests: XCTestCase {
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: WordLimit.storageKey)
+    }
+
+    /// A frame with words of decreasing size, top to bottom.
+    private func frame(_ words: [String], height: (Int) -> CGFloat = { 0.1 - CGFloat($0) * 0.01 }) -> Recognition {
+        Recognition(text: words.joined(separator: " "), words: words.enumerated().map { i, w in
+            SeenWord(text: w, box: CGRect(x: 0.1, y: 0.05 + CGFloat(i) * 0.1, width: 0.3, height: height(i)))
+        })
+    }
+
+    func testCrowdedViewGivesTheSameWordsEveryRead() {
+        UserDefaults.standard.set(5, forKey: WordLimit.storageKey)
+        let model = SceneModel()
+        let view = ["farmacia", "aperta", "tutta", "notte", "padre", "nostro", "pharmacy", "open"]
+        let start = Date()
+        for read in 0..<6 {
+            model.see(frame(view), imageSize: CGSize(width: 1000, height: 2000), full: true,
+                      now: start.addingTimeInterval(Double(read)))
+            if read == 0 {
+                XCTAssertEqual(model.words, [], "a word needs two reads before it joins")
+                continue
+            }
+            // the five most prominent, and the same ones on every read
+            XCTAssertEqual(model.words, ["farmacia", "aperta", "tutta", "notte", "padre"], "read \(read)")
+        }
+    }
+
+    func testNewWordsWaitUntilSomethingLeavesTheFrame() {
+        UserDefaults.standard.set(5, forKey: WordLimit.storageKey)
+        let model = SceneModel()
+        let size = CGSize(width: 1000, height: 2000)
+        let five = ["alpha", "bravo", "charlie", "delta", "echo"]
+        let t0 = Date()
+        model.see(frame(five), imageSize: size, full: true, now: t0)
+        model.see(frame(five), imageSize: size, full: true, now: t0.addingTimeInterval(0.5))
+        XCTAssertEqual(model.words, five)
+        // scene full, all still in view: a new word waits
+        model.see(frame(five + ["foxtrot"]), imageSize: size, full: true, now: t0.addingTimeInterval(1))
+        XCTAssertEqual(model.words, five)
+        // bravo leaves the frame; once it has been gone a while, foxtrot takes its place
+        let rest = ["alpha", "charlie", "delta", "echo", "foxtrot"]
+        model.see(frame(rest), imageSize: size, full: true, now: t0.addingTimeInterval(1.5))
+        XCTAssertEqual(model.words, five, "bravo was seen moments ago")
+        model.see(frame(rest), imageSize: size, full: true, now: t0.addingTimeInterval(4))
+        XCTAssertEqual(model.words, ["alpha", "charlie", "delta", "echo", "foxtrot"])
+    }
+
+    func testOneFrameMisreadingsNeverJoin() {
+        let model = SceneModel()
+        let size = CGSize(width: 1000, height: 2000)
+        let t0 = Date()
+        model.see(frame(["storia", "basket"]), imageSize: size, full: true, now: t0)
+        model.see(frame(["storia", "basket", "utore"]), imageSize: size, full: true, now: t0.addingTimeInterval(1))
+        model.see(frame(["storia", "basket"]), imageSize: size, full: true, now: t0.addingTimeInterval(2))
+        model.see(frame(["storia", "basket", "litore"]), imageSize: size, full: true, now: t0.addingTimeInterval(3))
+        XCTAssertEqual(model.words, ["storia", "basket"])
+    }
+
+    func testFragmentsAndAccentVariantsAreSkipped() {
+        let read = frame(["edicicloeditore", "tore", "ditore", "mia", "mía", "Basket"])
+        let picked = SceneModel.candidates(in: read, scene: [], rejected: []).map(\.text)
+        XCTAssertEqual(picked, ["edicicloeditore", "mia", "Basket"])
+        // and against words already in the scene
+        let later = SceneModel.candidates(in: frame(["carrer", "mía", "arre"]), scene: ["Carrer", "mia"],
+                                          rejected: ["ediciclo"])
+        XCTAssertEqual(later.map(\.text), [])
+    }
+
+    func testProminenceIgnoresSmallJitter() {
+        let a = SeenWord(text: "a", box: CGRect(x: 0.1, y: 0.200, width: 0.2, height: 0.0801))
+        let b = SeenWord(text: "b", box: CGRect(x: 0.5, y: 0.201, width: 0.2, height: 0.0799))
+        // same size and line once rounded: left to right, whichever frame it came from
+        XCTAssertTrue(SceneModel.moreProminent(a, b))
+        XCTAssertFalse(SceneModel.moreProminent(b, a))
+    }
+}

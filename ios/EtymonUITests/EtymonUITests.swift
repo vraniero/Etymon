@@ -157,8 +157,35 @@ final class EtymonUITests: XCTestCase {
         sleep(3)
         shot("12-explore-expanded")
 
+        // the panel is a sheet: its lists scroll inside it, and its handle resizes it
+        let handle = app.buttons["explorePanelHandle"]
+        let list = app.scrollViews["explorePanelList"]
+        XCTAssertTrue(handle.exists && list.exists)
+        let peek = list.frame.height
+        XCTAssertLessThan(peek, app.frame.height * 0.3, "the panel leaves most of the screen to the tree")
+        let grip = handle.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+        grip.press(forDuration: 0.05, thenDragTo: grip.withOffset(.init(dx: 0, dy: -300)))
+        XCTAssertTrue(waitFor { list.frame.height > peek + 50 }, "dragging the handle up enlarges it")
+        shot("13-explore-panel-expanded")
+        let grip2 = handle.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+        grip2.press(forDuration: 0.05, thenDragTo: grip2.withOffset(.init(dx: 0, dy: 600)))
+        XCTAssertTrue(waitFor { !list.exists && !expand.exists }, "dragging it down collapses it")
+        XCTAssertTrue(app.staticTexts["exploreSelected"].exists, "collapsed, the word stays visible")
+        shot("14-explore-panel-collapsed")
+        handle.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 3), "tapping the handle opens it again")
+
         app.buttons["closeExplore"].tap()
         XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
+    }
+
+    private func waitFor(_ timeout: TimeInterval = 3, _ condition: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return condition()
     }
 
     private func dismissSheet(_ app: XCUIApplication) {

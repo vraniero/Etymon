@@ -43,6 +43,16 @@ def test_nodes_are_placed_on_the_map():
     assert 50 < lat < 56 and -6 < lon < 2  # England
 
 
+def test_relation_words_are_not_words():
+    """"Borrowed from Latin rhombus, borrowed from Ancient Greek..." once made a Latin
+    word "borrowed"; relation words never become nodes."""
+    r = client.post("/scene", json={"words": [{"text": "coach", "lang": "en"},
+                                              {"text": "rhombus", "lang": "en"},
+                                              {"text": "rombo", "lang": "it"}]}).json()
+    words = {n["word"] for n in r["nodes"].values()}
+    assert not words & {"borrowed", "inherited", "derived", "learned"}
+
+
 def test_language_detected_and_ocr_noise_stripped():
     r = client.post("/scene", json={"words": [{"text": "NOCHE,"}, {"text": "Nacht"}]}).json()
     assert [w["lang"] for w in r["words"]] == ["es", "de"]

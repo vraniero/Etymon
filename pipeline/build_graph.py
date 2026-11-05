@@ -89,7 +89,15 @@ PROSE_KIND = {"inherited": "inherited", "borrowed": "borrowed", "derived": "deri
               "calque of": "calque", "from": "derived"}
 PROSE_LEAD = re.compile(r"(?:^|\n|\. )(Inherited|Borrowed|Derived|Learned borrowing|"
                         r"Semi-learned borrowing|Calque of|From)\s+(?:from\s+)?([^.\n]+)")
-PROSE_FROM = re.compile(r",?\s+(?:which (?:is|are) )?(?:ultimately )?from\s+")
+# One link of a prose chain: ", from", ", ultimately from", ", borrowed from", ", itself a
+# learned borrowing from"... The relation, if stated, is captured: it sets that step's kind.
+PROSE_FROM = re.compile(r",?\s+(?:which (?:is|are) |itself )?(?:ultimately )?"
+                        r"(?:(inherited|borrowed|derived|learned borrowing|"
+                        r"semi-learned borrowing|a calque of|calque of)\s+)?from\s+", re.I)
+# Relation words are never words of the chain ("Latin rhombus, borrowed" must not give
+# a Latin word "borrowed").
+RELATION_WORDS = {"inherited", "borrowed", "derived", "learned", "borrowing", "calque",
+                  "from", "itself", "ultimately"}
 PROSE_OR = re.compile(r",\s*(?:or\s+)?|\s+or\s+|\s+and\s+")
 HEDGED = re.compile(r",?\s+(?:possibly|perhaps|probably|maybe)\b.*", re.I)
 UNCERTAIN = re.compile(r"\b(possibly|perhaps|probably|maybe|uncertain|unknown|"
@@ -210,7 +218,14 @@ class Graph:
         kind = PROSE_KIND[m.group(1).lower()]
         body = HEDGED.sub("", PAREN.sub("", m.group(2)))
         parents, prev_lang = [head], None
-        for depth, step in enumerate(PROSE_FROM.split(body)):
+        # split() with the captured relation gives [step, relation, step, relation, step...]
+        pieces = PROSE_FROM.split(body)
+        steps = pieces[0::2]
+        relations = [None] + pieces[1::2]
+        for depth, step in enumerate(steps):
+            if depth and relations[depth]:
+                stated = relations[depth].lower().removeprefix("a ")
+                kind = PROSE_KIND.get(stated, PROSE_KIND.get(stated + " of", kind))
             group = []
             for item in PROSE_OR.split(step.strip()):
                 item = item.strip(" ,;:")
@@ -219,7 +234,7 @@ class Graph:
                     break
                 lang, w = self.split_lang(item)
                 lang = lang or prev_lang  # "from Latin paternus, from pater"
-                if not lang or not w or len(w.split()) > 2:
+                if not lang or not w or len(w.split()) > 2 or w.lower() in RELATION_WORDS:
                     group = None
                     break
                 group.append(self.node(lang, w))

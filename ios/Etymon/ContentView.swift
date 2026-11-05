@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var exploreGraph: ExploreGraph?  // set = Explore is open
     @AppStorage(NetworkLayers.storageKey) private var layers: NetworkLayers = .both
     @AppStorage(SearchDepth.storageKey) private var searchDepth = SearchDepth.defaultValue
+    @AppStorage(WordLimit.storageKey) private var maxWords = WordLimit.defaultValue
 
     var body: some View {
         NavigationStack {
@@ -59,6 +60,7 @@ struct ContentView: View {
             .navigationTitle("Etymon")
             .navigationBarTitleDisplayMode(.inline)
             .onChange(of: searchDepth) { model.refresh() }
+            .onChange(of: maxWords) { model.applyWordLimit() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Clear", systemImage: "trash") { model.reset() }

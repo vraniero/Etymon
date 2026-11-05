@@ -10,7 +10,7 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from modern import HAS_FREQUENCY, MODERN, zipf
+from modern import MODERN, has_frequency, zipf
 
 DATA = Path(__file__).parent / "data"
 UPWARD = ("inherited", "derived", "borrowed", "learned", "calque", "semantic_loan",
@@ -32,8 +32,8 @@ def main():
     db.executescript("""
         CREATE TEMP TABLE keep (id INTEGER PRIMARY KEY);
     """)
-    ranked = [l for l in MODERN if l in HAS_FREQUENCY]
-    unranked = [l for l in MODERN if l not in HAS_FREQUENCY]
+    ranked = [l for l in MODERN if l in has_frequency()]
+    unranked = [l for l in MODERN if l not in has_frequency()]
     db.execute(f"""
         INSERT INTO keep SELECT id FROM full.term
         WHERE lang IN ({','.join('?' * len(ranked))}) AND has_entry=1 AND zipf >= ?
@@ -85,7 +85,7 @@ def main():
     """).fetchall()
     db.executemany("INSERT INTO form VALUES (?,?,?)",
                    (r for r in rows
-                    if r[0] in HAS_FREQUENCY and r[2] in keep
+                    if r[0] in has_frequency() and r[2] in keep
                     and zipf(r[1], r[0]) >= args.zipf - 0.5))
 
     db.executescript("""

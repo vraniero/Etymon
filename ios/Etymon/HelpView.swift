@@ -57,8 +57,10 @@ struct HelpView: View {
                 Section {
                     HelpRow(symbol: "pause.fill", title: "Hold",
                             text: "Shown while the app is collecting. About once a second it reads "
-                                + "the frame and adds new words to the scene (up to 20; past that the "
-                                + "oldest drop off), then updates the network. Pan across a street and "
+                                + "the frame and adds new words to the scene, up to the limit in Settings "
+                                + "(20 by default), then updates the network. With more words in view "
+                                + "than that, words still in view keep their place and the largest new "
+                                + "words wait for one to leave the frame. Pan across a street and "
                                 + "words from different signs build up and connect.\n\n"
                                 + "Tap Hold to freeze the scene: no new words are added and the network "
                                 + "stays as it is.")

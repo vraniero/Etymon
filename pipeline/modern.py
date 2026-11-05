@@ -2,7 +2,7 @@
 ranked by frequency, and they are the living end of every network (descendants shown,
 words kept in the mobile export). Codes are Wiktionary's.
 """
-from wordfreq import available_languages, zipf_frequency
+from functools import cache
 
 MODERN = (
     "en", "it", "es", "fr", "de",
@@ -14,11 +14,21 @@ MODERN = (
     "ro", "hu", "et", "lt", "lv",
 )
 
-# wordfreq has no lists for some of them (Belarusian, Estonian): no frequency, not zero
-HAS_FREQUENCY = set(MODERN) & set(available_languages())
+
+# wordfreq is imported only when frequencies are needed (building the graph): the
+# backend imports MODERN from here and doesn't have wordfreq installed.
+@cache
+def has_frequency():
+    """Languages wordfreq has lists for; some (Belarusian, Estonian) have none: no
+    frequency, not zero."""
+    from wordfreq import available_languages
+    return set(MODERN) & set(available_languages())
 
 
 def zipf(word, lang):
     """Word frequency on the Zipf scale (3 = once per million words); None when the
     language has no frequency list."""
-    return zipf_frequency(word, lang) if lang in HAS_FREQUENCY else None
+    if lang not in has_frequency():
+        return None
+    from wordfreq import zipf_frequency
+    return zipf_frequency(word, lang)

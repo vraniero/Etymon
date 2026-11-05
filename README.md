@@ -275,8 +275,11 @@ The same guide is in the app: tap **?** in the toolbar.
 switches between two modes; the label is the action it will take:
 
 - **Normal (button reads *Hold*)** — the app keeps collecting. About once a second it
-  reads the frame carefully and **adds new words** to the scene, up to 20 (past that the
-  oldest drop off), then asks for the network again. Pan across a street and words from
+  reads the frame carefully and **adds new words** to the scene, up to the **Maximum
+  words** set in Settings (20 by default, 5–50). When more words are in view than that,
+  the scene stays stable: words still in view keep their place, only words that have
+  left the frame make room, and new words are taken largest on screen first, then in
+  reading order — so the same view always gives the same words, then asks for the network again. Pan across a street and words from
   different signs accumulate and connect to each other.
 - **Held (button reads *Collect*)** — the scene is **frozen**: no new words are added and
   the network stays as it is, but the collected words are still **tracked** — outlines,
@@ -319,7 +322,9 @@ children, modern and common words first); the monitor prints an `explore` line f
 - **Tap a bubble** — how the two words reach their shared ancestor, step by step, and the
   deeper line above it to the oldest known root.
 - **Tap a word** — that word's own lineage.
-- **Gear** (top right) — the backend address (simulator: `http://localhost:8000`; phone:
+- **Gear** (top right) — Settings: **Maximum words** a scene can discover at once
+  (5–50, default 20; lowering it drops the oldest words now), search depth, and the
+  backend address (simulator: `http://localhost:8000`; phone:
   `http://<Mac address>:8000`).
 - **?** — this guide.
 
@@ -389,7 +394,7 @@ What to look for:
 - **Is the language right?** The scene's language decides how ambiguous words are read
   (*farmacia* as Italian, not Spanish).
 - **Is it fast enough?** Scenes normally take tens of milliseconds; much more means the
-  database is on slow storage or the scene is unusually large (up to 20 words).
+  database is on slow storage or the scene is unusually large (up to the Maximum words setting, at most 50).
 
 Options:
 

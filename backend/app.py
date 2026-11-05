@@ -27,7 +27,7 @@ from connect import MAX_COST, climb, is_affix, lineage, meetings  # noqa: E402
 from query import MODERN, resolve  # noqa: E402
 
 DB_PATH = Path(os.environ.get("ETYMON_DB", PIPELINE / "data" / "etymon.sqlite"))
-MAX_WORDS = 30
+MAX_WORDS = 50  # per scene; the app's word limit goes up to this
 MAX_SEARCH_DEPTH = 40
 PUNCT = " \t\n.,;:!?¡¿\"'“”‘’«»()[]{}"
 

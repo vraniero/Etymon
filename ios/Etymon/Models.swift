@@ -30,6 +30,18 @@ enum SearchDepth {
     }
 }
 
+/// How many words a scene can hold at once: past this the oldest drop off. Set in Settings.
+enum WordLimit {
+    static let storageKey = "maxWords"
+    static let defaultValue = 20
+    static let range = 5...50  // backend accepts up to 50 (backend/app.py MAX_WORDS)
+
+    static var current: Int {
+        let stored = UserDefaults.standard.integer(forKey: storageKey)
+        return stored == 0 ? defaultValue : min(max(stored, range.lowerBound), range.upperBound)
+    }
+}
+
 /// How deep the search that produced a scene went.
 struct SearchInfo: Decodable, Hashable {
     let maxCost: Double  // the depth asked for

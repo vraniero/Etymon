@@ -14,20 +14,43 @@ struct ExploreView: View {
     @State private var error: String?
     @State private var lineage: ExploreGraph.XNode?
 
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            NetworkScene(graph: graph, version: graph.version, selected: $selected)
-                .ignoresSafeArea()
-                .accessibilityIdentifier("explore3D")
+    /// How much of the screen the panel takes. Drag its handle (or tap it) to change.
+    enum Detent: CaseIterable {
+        case collapsed, peek, expanded
+        /// Share of the screen for the panel's scrolling part; collapsed shows none.
+        var share: CGFloat {
+            switch self {
+            case .collapsed: return 0
+            case .peek: return 0.26
+            case .expanded: return 0.62
+            }
+        }
+    }
 
-            VStack(spacing: 0) {
-                header
-                Spacer()
-                panel
+    @State private var detent: Detent = .peek
+    @State private var drag: CGFloat = 0  // live drag of the handle, points (up = positive)
+    @State private var bodyHeight: CGFloat = 0  // natural height of the scrolling content
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                NetworkScene(graph: graph, version: graph.version, selected: $selected)
+                    .ignoresSafeArea()
+                    .accessibilityIdentifier("explore3D")
+
+                VStack(spacing: 0) {
+                    header
+                    Spacer(minLength: 0)
+                    panel(screen: geo.size.height)
+                }
             }
         }
         .background(Color(red: 0.05, green: 0.06, blue: 0.1))
         .environment(\.colorScheme, .dark)
+        .onChange(of: selected) { _, id in
+            // picking a word in the tree brings its details up
+            if id != nil, detent == .collapsed { withAnimation(.snappy) { detent = .peek } }
+        }
         .sheet(item: $lineage) { node in
             NavigationStack { WordDetail(text: node.label, lang: node.lang) }
                 .presentationDetents([.medium, .large])
@@ -52,56 +75,121 @@ struct ExploreView: View {
         .padding()
     }
 
-    @ViewBuilder private var panel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let id = selected, let node = graph.nodes[id] {
-                details(node)
-            } else {
-                Text("Tap a word to explore it — or start from one seen in the scene:")
-                    .font(.subheadline)
-                chips(graph.sceneWords.compactMap { graph.nodes[$0] }.map { ($0, nil) })
-                Text("Drag to turn · pinch to zoom · press and hold a word to move it")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            if let error {
-                Text(error).font(.caption).foregroundStyle(.red)
+    // MARK: panel
+
+    /// A bottom sheet over the tree: a handle to drag, the selected word and its actions
+    /// (always visible), then the lists, which scroll inside the panel instead of growing
+    /// it. Collapsed, only the handle and the word remain, leaving the tree free.
+    private func panel(screen: CGFloat) -> some View {
+        let limit = detentHeight(.expanded, screen)
+        let target = detentHeight(detent, screen)
+        let height = min(max(target + drag, 0), limit)
+        return VStack(alignment: .leading, spacing: 10) {
+            handle(screen: screen)
+            top
+            if height > 1 {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) { scrolling }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            bodyHeight = $0
+                        }
+                }
+                .frame(height: min(height, bodyHeight))
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier("explorePanelList")
             }
         }
-        .padding()
+        .padding([.horizontal, .bottom])
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .padding(.horizontal, 10).padding(.bottom, 6)
     }
 
-    @ViewBuilder private func details(_ node: ExploreGraph.XNode) -> some View {
-        let links = graph.neighbors(of: node.id)
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(node.label).font(.title2.bold()).italic(node.reconstructed)
-                    .accessibilityIdentifier("exploreSelected")
-                Text(node.language + (role(node).map { " · " + $0 } ?? ""))
-                    .font(.caption).foregroundStyle(.secondary)
+    private func detentHeight(_ d: Detent, _ screen: CGFloat) -> CGFloat { screen * d.share }
+
+    /// Drag up or down to resize; let go and it settles on the nearest size (a flick goes
+    /// with the flick). Tap to switch between collapsed and open.
+    private func handle(screen: CGFloat) -> some View {
+        Capsule().fill(.secondary).frame(width: 40, height: 5)
+            .frame(maxWidth: .infinity).frame(height: 22)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                    .onChanged { drag = -$0.translation.height }
+                    .onEnded { value in
+                        let current = detentHeight(detent, screen)
+                        let predicted = current - value.predictedEndTranslation.height
+                        let next = Detent.allCases.min {
+                            abs(detentHeight($0, screen) - predicted) < abs(detentHeight($1, screen) - predicted)
+                        } ?? detent
+                        withAnimation(.snappy) {
+                            detent = next
+                            drag = 0
+                        }
+                    })
+            .onTapGesture {
+                withAnimation(.snappy) { detent = detent == .collapsed ? .peek : .collapsed }
             }
-            Spacer()
-            Button { selected = nil } label: { Image(systemName: "xmark.circle.fill") }
-                .foregroundStyle(.secondary)
+            .accessibilityElement()
+            .accessibilityLabel(detent == .collapsed ? "Show panel" : "Hide panel")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                withAnimation(.snappy) { detent = detent == .collapsed ? .peek : .collapsed }
+            }
+            .accessibilityAdjustableAction { direction in
+                let all = Detent.allCases, i = all.firstIndex(of: detent) ?? 1
+                withAnimation(.snappy) {
+                    switch direction {
+                    case .increment: detent = all[min(i + 1, all.count - 1)]
+                    case .decrement: detent = all[max(i - 1, 0)]
+                    @unknown default: break
+                    }
+                }
+            }
+            .accessibilityIdentifier("explorePanelHandle")
+            .padding(.bottom, -4)
+    }
+
+    /// Always shown: what is selected and what can be done with it.
+    @ViewBuilder private var top: some View {
+        if let id = selected, let node = graph.nodes[id] {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(node.label).font(.title2.bold()).italic(node.reconstructed)
+                        .accessibilityIdentifier("exploreSelected")
+                    Text(node.language + (role(node).map { " · " + $0 } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { selected = nil } label: { Image(systemName: "xmark.circle.fill") }
+                    .foregroundStyle(.secondary)
+            }
+            if detent != .collapsed {
+                actions(node)
+            }
+        } else {
+            Text("Tap a word to explore it — or start from one seen in the scene:")
+                .font(.subheadline)
         }
-        if let gloss = node.gloss {
-            Text(gloss).font(.subheadline).lineLimit(2)
+        if let error {
+            Text(error).font(.caption).foregroundStyle(.red)
         }
-        VStack(alignment: .leading, spacing: 8) {
-            if !links.parents.isEmpty {
-                section("comes from", links.parents.compactMap { e in graph.nodes[e.b].map { ($0, e.kind) } })
-            }
-            if !links.children.isEmpty {
-                section("gave", links.children.compactMap { e in graph.nodes[e.a].map { ($0, e.kind) } })
-            }
-            if !links.meanings.isEmpty {
-                section("same meaning", links.meanings.compactMap { e in
-                    graph.nodes[e.a == node.id ? e.b : e.a].map { ($0, "= " + (e.meaning ?? "")) }
-                })
-            }
+    }
+
+    /// The part that scrolls: the word's links, or the scene's words to start from.
+    @ViewBuilder private var scrolling: some View {
+        if let id = selected, let node = graph.nodes[id] {
+            details(node)
+        } else {
+            chips(graph.sceneWords.compactMap { graph.nodes[$0] }.map { ($0, nil) })
+            Text("Drag to turn · pinch to zoom · press and hold a word to move it · "
+                 + "drag the handle to resize this panel")
+                .font(.caption2).foregroundStyle(.secondary)
         }
+    }
+
+    private func actions(_ node: ExploreGraph.XNode) -> some View {
         HStack {
             Button {
                 Task { await expand(node.id) }
@@ -121,6 +209,26 @@ struct ExploreView: View {
         }
         .lineLimit(1)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func details(_ node: ExploreGraph.XNode) -> some View {
+        let links = graph.neighbors(of: node.id)
+        if let gloss = node.gloss {
+            Text(gloss).font(.subheadline)
+        }
+        VStack(alignment: .leading, spacing: 8) {
+            if !links.parents.isEmpty {
+                section("comes from", links.parents.compactMap { e in graph.nodes[e.b].map { ($0, e.kind) } })
+            }
+            if !links.children.isEmpty {
+                section("gave", links.children.compactMap { e in graph.nodes[e.a].map { ($0, e.kind) } })
+            }
+            if !links.meanings.isEmpty {
+                section("same meaning", links.meanings.compactMap { e in
+                    graph.nodes[e.a == node.id ? e.b : e.a].map { ($0, "= " + (e.meaning ?? "")) }
+                })
+            }
+        }
         if let total = node.totalChildren, total > links.children.count {
             Text("\(total - links.children.count) more descendants in the dictionary")
                 .font(.caption2).foregroundStyle(.secondary)

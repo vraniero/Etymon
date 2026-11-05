@@ -88,6 +88,7 @@ struct WordDetail: View {
 struct SettingsView: View {
     @AppStorage(APIClient.baseURLKey) private var baseURL = APIClient.defaultBaseURL
     @AppStorage(SearchDepth.storageKey) private var depth = SearchDepth.defaultValue
+    @AppStorage(WordLimit.storageKey) private var maxWords = WordLimit.defaultValue
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -102,6 +103,21 @@ struct SettingsView: View {
                 } footer: {
                     Text("The simulator can use localhost. On a phone, use your Mac's address, "
                          + "e.g. http://192.168.1.20:8000, and start the server with --host 0.0.0.0.")
+                }
+                Section {
+                    Stepper(value: $maxWords, in: WordLimit.range, step: 5) {
+                        LabeledContent("Maximum words", value: "\(maxWords)").monospacedDigit()
+                    }
+                    .accessibilityIdentifier("maxWords")
+                    Button("Reset to \(WordLimit.defaultValue)") { maxWords = WordLimit.defaultValue }
+                        .disabled(maxWords == WordLimit.defaultValue)
+                } header: {
+                    Text("Words")
+                } footer: {
+                    Text("How many words a scene can discover at once. Words still in view keep "
+                         + "their place; new ones (largest first) take the place of words that have "
+                         + "left the frame. More words find more connections, but the network gets "
+                         + "busier and slower to update.")
                 }
                 Section {
                     SearchDepthStepper()

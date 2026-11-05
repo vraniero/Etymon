@@ -6,8 +6,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from modern import MODERN  # noqa: F401  (re-exported for the backend)
+
 ANCESTRY = ("inherited", "borrowed", "learned", "calque", "semantic_loan", "derived")
-MODERN = ("en", "it", "es", "fr", "de")
 
 
 def resolve(db, lang, word):

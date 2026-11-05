@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import Etymon
 
@@ -14,6 +15,38 @@ final class WordExtractorTests: XCTestCase {
     func testDominantLanguage() {
         XCTAssertEqual(WordExtractor.dominantLanguage(of: "Farmacia aperta tutta la notte"), "it")
         XCTAssertEqual(WordExtractor.dominantLanguage(of: "Die Apotheke ist heute geschlossen"), "de")
+        XCTAssertEqual(WordExtractor.dominantLanguage(of: "Аптека открыта круглосуточно"), "ru")
+        XCTAssertEqual(WordExtractor.dominantLanguage(of: "Аптека відчинена цілодобово"), "uk")
+        XCTAssertEqual(WordExtractor.dominantLanguage(of: "Apteka jest czynna całą dobę"), "pl")
+        XCTAssertEqual(WordExtractor.dominantLanguage(of: "Ljekarna je otvorena cijelu noć"), "sh")
+    }
+
+    func testSplitsCyrillic() {
+        XCTAssertEqual(WordExtractor.words(in: "Аптека — это вода, ВОДА и молоко"),
+                       ["Аптека", "вода", "молоко"])
+    }
+
+    func testSystemCodes() {
+        XCTAssertEqual(WordExtractor.code(forSystem: "hr-HR"), "sh")
+        XCTAssertEqual(WordExtractor.code(forSystem: "ru-RU"), "ru")
+        XCTAssertEqual(WordExtractor.code(forSystem: "en-US"), "en")
+    }
+
+    /// Vision reads Cyrillic alongside Latin languages in one careful pass; quick passes
+    /// can't, so a Cyrillic scene is tracked with careful ones.
+    func testRecognizesCyrillic() throws {
+        XCTAssertTrue(WordExtractor.accurateLanguages.contains("ru-RU"))
+        let size = CGSize(width: 1000, height: 200)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor.white.setFill()
+            UIRectFill(CGRect(origin: .zero, size: size))
+            ("Хлеб и молоко" as NSString).draw(at: CGPoint(x: 40, y: 50), withAttributes: [
+                .font: UIFont.boldSystemFont(ofSize: 80), .foregroundColor: UIColor.black])
+        }
+        let recognition = try WordExtractor.recognize(in: XCTUnwrap(image.cgImage))
+        XCTAssertEqual(recognition.words.map(\.text), ["Хлеб", "молоко"])
+        XCTAssertFalse(WordExtractor.fastReads(recognition.text))
+        XCTAssertTrue(WordExtractor.fastReads("Farmacia aperta tutta la notte"))
     }
 }
 

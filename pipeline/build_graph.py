@@ -27,10 +27,9 @@ import sys
 import unicodedata
 from pathlib import Path
 
-from wordfreq import zipf_frequency
+from modern import MODERN, zipf
 
 DATA = Path(__file__).parent / "data"
-MODERN = ("en", "it", "es", "fr", "de")
 
 ANCESTRY = {
     "inh": "inherited", "inh+": "inherited", "inh-lite": "inherited",
@@ -56,6 +55,18 @@ LENGTH_MARKS = {"\u0304", "\u0306"}  # combining macron, breve
 ARABIC_MARKS = {chr(c) for c in range(0x064B, 0x0653)} | {"\u0670"}
 HEBREW_MARKS = {chr(c) for c in range(0x0591, 0x05C8)} - {"\u05BE", "\u05C0", "\u05C3", "\u05C6"}
 CYRILLIC_STRESS = {"\u0301", "\u0300"}
+# ...except where the acute is part of the letter: Macedonian ѓ, ќ (г, к + acute).
+CYRILLIC_ACUTE_LETTERS = set("гкГК")
+# Dictionary tone and length marks that page names omit (Serbo-Croatian vòda, о̏тац;
+# Slovene vóda; Lithuanian tė́vas, vil̃kas). Serbo-Croatian and Slovene put them only on
+# vowels and syllabic r, which keeps ć (c + acute) intact; Baltic letters never carry them.
+TONE_MARKS = {
+    "sh": {"\u0300", "\u0301", "\u0304", "\u030F", "\u0311"},
+    "sl": {"\u0300", "\u0301", "\u0302", "\u030F", "\u0311", "\u0323"},
+    "lt": {"\u0300", "\u0301", "\u0303"},
+    "lv": {"\u0300", "\u0301", "\u0302", "\u0303"},
+}
+TONE_BEARERS = {"sh": set("aeiourAEIOURаеиоурАЕИОУР"), "sl": set("aeiouərAEIOUƏR")}
 
 SCHEMA = """
 CREATE TABLE family   (code TEXT PRIMARY KEY, name TEXT, parent TEXT);
@@ -222,9 +233,12 @@ class Graph:
             if kind == "borrowed":
                 kind = "derived"  # later steps of a borrowing are its source's own history
 
-    def strips_length(self, lang):
+    def marks(self, lang):
+        """(length marks dropped?, tone marks dropped, letters they sit on or None for any)"""
         if lang not in self._strip_cache:
-            self._strip_cache[lang] = base_language(lang, self.language_rows) in STRIP_LENGTH_ROOTS
+            base = base_language(lang, self.language_rows)
+            self._strip_cache[lang] = (base in STRIP_LENGTH_ROOTS, TONE_MARKS.get(base, set()),
+                                       TONE_BEARERS.get(base))
         return self._strip_cache[lang]
 
     def clean(self, lang, word):
@@ -232,17 +246,26 @@ class Graph:
         if not word or word in ("-", "?", "*"):
             return None
         word = unicodedata.normalize("NFD", word)
-        drop = set()
-        if self.strips_length(lang):
+        length, tones, bearers = self.marks(lang) if lang else (False, set(), None)
+        drop = set()  # dropped wherever they are
+        if length:
             drop |= LENGTH_MARKS
         if any("\u0600" <= c <= "\u06FF" for c in word):
             drop |= ARABIC_MARKS
         if any("\u0590" <= c <= "\u05FF" for c in word):
             drop |= HEBREW_MARKS
-        if any("\u0400" <= c <= "\u04FF" for c in word):
-            drop |= CYRILLIC_STRESS
-        if drop:
-            word = "".join(c for c in word if c not in drop)
+        cyrillic = any("\u0400" <= c <= "\u04FF" for c in word)
+        if drop or tones or cyrillic:
+            out, base = [], ""
+            for c in word:
+                if not unicodedata.combining(c):
+                    base = c
+                elif (c in drop or (c in tones and (bearers is None or base in bearers))
+                      or (cyrillic and c in CYRILLIC_STRESS
+                          and not (c == "\u0301" and base in CYRILLIC_ACUTE_LETTERS))):
+                    continue
+                out.append(c)
+            word = "".join(out)
         return unicodedata.normalize("NFC", word)
 
     def node(self, lang, word):
@@ -395,8 +418,8 @@ def main(out_path):
     def term_rows():
         for (lang, word), tid in graph.ids.items():
             gloss, etym, has_entry = graph.info[tid]
-            zipf = zipf_frequency(word, lang) if lang in MODERN else None
-            yield tid, lang, word, gloss or None, etym or None, zipf or None, has_entry
+            freq = zipf(word, lang) if lang in MODERN else None
+            yield tid, lang, word, gloss or None, etym or None, freq or None, has_entry
 
     db.executemany("INSERT INTO term VALUES (?,?,?,?,?,?,?)", term_rows())
     # A word whose own entry states where it comes from is authoritative: chain links

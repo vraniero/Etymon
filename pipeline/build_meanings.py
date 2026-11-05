@@ -14,8 +14,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from modern import MODERN
+
 DATA = Path(__file__).parent / "data"
-MODERN = ("it", "es", "fr", "de")  # defined in English; English itself is the pivot
 MAX_KEYS = 4
 MAX_WORDS = 3
 
@@ -56,7 +57,7 @@ def main(db_path):
     rows = []
     for tid, lang, word, gloss in db.execute(
             f"SELECT id, lang, word, gloss FROM term WHERE has_entry=1 AND "
-            f"lang IN ('en',{','.join('?' * len(MODERN))})", MODERN):
+            f"lang IN ({','.join('?' * len(MODERN))})", MODERN):
         if lang == "en":
             key = word.lower()
             if WORDLIKE.match(key) and len(key.split()) <= MAX_WORDS:

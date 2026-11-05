@@ -19,6 +19,7 @@ final class CameraScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     private var lastFull = Date.distantPast
     private var lastTrack = Date.distantPast
     private var isBusy = false
+    private var trackFast = true  // false while the scene is in a script fast passes can't read
     private let fullInterval: TimeInterval = 1.0
     private let trackInterval: TimeInterval = 0.08
 
@@ -67,7 +68,8 @@ final class CameraScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         // image is the buffer rotated: width and height swap
         let size = CGSize(width: CVPixelBufferGetHeight(buffer), height: CVPixelBufferGetWidth(buffer))
         guard let recognition = try? WordExtractor.recognize(in: buffer, orientation: .right,
-                                                             fast: !full) else { return }
+                                                             fast: !full && trackFast) else { return }
+        if full { trackFast = WordExtractor.fastReads(recognition.text) }
         let frame = Frame(recognition: recognition, imageSize: size, isFull: full)
         DispatchQueue.main.async { [weak self] in self?.onFrame?(frame) }
     }

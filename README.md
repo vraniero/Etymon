@@ -52,13 +52,18 @@ python3 -m venv .venv
     "Old English" "Old Saxon" "Old High German" "Middle High German" "Old Norse" "Gothic" \
     "Middle English" "Old French" "Middle French" "Old Spanish" "Old Irish" \
     "Old Church Slavonic" Sanskrit
+# Central and Eastern Europe: Cyrillic and Latin-script Slavic, Romanian, Hungarian, Baltic
+.venv/bin/python fetch.py Russian Ukrainian Belarusian Bulgarian Macedonian "Serbo-Croatian" \
+    Polish Czech Slovak Slovene Romanian Hungarian Estonian Lithuanian Latvian \
+    "Old East Slavic" "Old Ruthenian" "Old Polish" "Old Czech" "Old Slovak" \
+    "Proto-Uralic" "Proto-Finnic" "Proto-Turkic"
 .venv/bin/python build_graph.py
 .venv/bin/python build_meanings.py
 .venv/bin/python geo.py        # where each language was spoken, for the map view
 ```
 
 Downloading takes from under an hour to a few hours depending on kaikki.org's speed
-(English alone is 3.3 GB); downloads resume if interrupted, and languages already
+(English alone is 3.3 GB, the Central and Eastern European set about 5 GB more); downloads resume if interrupted, and languages already
 fetched are skipped. `build_graph.py` takes about 10 minutes. The result is
 `pipeline/data/etymon.sqlite`. Check it:
 

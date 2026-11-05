@@ -20,7 +20,13 @@ struct Recognition {
 
 /// Turns recognised text into the candidate words of a scene.
 enum WordExtractor {
-    static let languages = ["it", "en", "es", "fr", "de"]
+    /// The languages the backend knows, by Wiktionary code (Serbo-Croatian is one, "sh").
+    static let languages = ["it", "en", "es", "fr", "de",
+                            "ru", "uk", "be", "bg", "mk",
+                            "sh", "pl", "cs", "sk", "sl",
+                            "ro", "hu", "et", "lt", "lv"]
+    /// System codes for the same languages where they differ (NaturalLanguage, Vision).
+    static let systemCodes: [String: [String]] = ["sh": ["hr", "sr", "bs"]]
     static let minLength = 3
 
     /// Function words connect to almost everything through PIE and only add noise.
@@ -38,6 +44,29 @@ enum WordExtractor {
         // de
         "der", "die", "das", "und", "den", "dem", "des", "ein", "eine", "einen", "mit", "von",
         "für", "auf", "ist", "nicht", "zu", "im", "am",
+        // ru, uk, be
+        "что", "это", "как", "для", "или", "его", "она", "они", "все", "был", "так", "уже",
+        "при", "без", "над", "под", "про", "где", "кто", "нет", "або", "його", "вона", "вони",
+        "від", "але", "які", "яка", "який", "щоб", "яго", "яна", "яны", "што", "гэта",
+        // bg, mk, sh (Cyrillic)
+        "във", "със", "като", "това", "тази", "този", "които", "кои", "или", "што", "које",
+        "који", "која", "али", "као", "ова", "ово",
+        // sh, sl (Latin)
+        "ili", "koji", "koja", "koje", "što", "kao", "ali", "ova", "ovo", "taj", "bez", "pri",
+        "nad", "kod", "kot", "ter", "tudi", "kar", "brez",
+        // pl, cs, sk
+        "nie", "jest", "się", "dla", "oraz", "lub", "jak", "ale", "przy", "przez", "tak",
+        "czy", "jego", "jej", "ich", "który", "która", "które", "też", "już", "není", "jsou",
+        "nebo", "při", "přes", "jeho", "její", "jejich", "který", "která", "které", "pre",
+        "alebo", "ako", "cez", "ktorý", "ktorá", "ktoré", "aby",
+        // hu
+        "egy", "és", "nem", "hogy", "azt", "ezt", "volt", "vagy", "csak", "mint", "még", "már",
+        // ro
+        "și", "sau", "pentru", "este", "sunt", "cel", "cea", "cele", "într", "unei", "unui",
+        "lui", "prin", "spre", "fost", "fie",
+        // lt, lv, et
+        "kad", "yra", "arba", "kaip", "nuo", "iki", "prie", "jis", "jie", "tai", "kuris",
+        "kuri", "arī", "pēc", "nav", "tas", "kur", "või", "aga", "nii", "kes", "ning",
     ]
 
     /// Runs of letters in a string that are worth looking up (apostrophes split: l'eau -> eau).
@@ -75,11 +104,39 @@ enum WordExtractor {
     /// Most likely language of the whole scene, among the supported ones.
     static func dominantLanguage(of text: String) -> String? {
         let recognizer = NLLanguageRecognizer()
-        recognizer.languageConstraints = languages.map { NLLanguage($0) }
+        recognizer.languageConstraints = languages.flatMap { systemCodes[$0] ?? [$0] }
+            .map { NLLanguage($0) }
         recognizer.processString(text)
         guard let (lang, confidence) = recognizer.languageHypotheses(withMaximum: 1).first,
               confidence > 0.5 else { return nil }
-        return lang.rawValue
+        return code(forSystem: lang.rawValue)
+    }
+
+    /// Wiktionary code for a system language code: hr, sr, bs -> sh.
+    static func code(forSystem system: String) -> String {
+        let base = String(system.prefix { $0 != "-" && $0 != "_" })
+        return systemCodes.first { $0.value.contains(base) }?.key ?? base
+    }
+
+    /// The supported languages Vision can read at each recognition level, in the order of
+    /// `languages` (earlier ones are preferred when text is ambiguous).
+    static let accurateLanguages = supportedRecognitionLanguages(.accurate)
+    static let fastLanguages = supportedRecognitionLanguages(.fast)
+
+    /// Whether quick recognition can read this text. It knows only a few Latin-script
+    /// languages: Cyrillic, or Polish with its ł and ś, needs careful passes even to track.
+    static func fastReads(_ text: String) -> Bool {
+        if let lang = dominantLanguage(of: text) {
+            return fastLanguages.contains { code(forSystem: $0) == lang }
+        }
+        return text.unicodeScalars.allSatisfy { $0.value < 0x0180 }  // Latin-1 and Extended-A
+    }
+
+    static func supportedRecognitionLanguages(_ level: VNRequestTextRecognitionLevel) -> [String] {
+        let probe = VNRecognizeTextRequest()
+        probe.recognitionLevel = level
+        let supported = (try? probe.supportedRecognitionLanguages()) ?? []
+        return languages.flatMap { lang in supported.filter { code(forSystem: $0) == lang }.prefix(1) }
     }
 
     /// Recognise text and word positions in an image. `fast` trades accuracy for speed,
@@ -87,7 +144,7 @@ enum WordExtractor {
     static func recognize(_ handler: VNImageRequestHandler, fast: Bool) throws -> Recognition {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = fast ? .fast : .accurate
-        request.recognitionLanguages = ["it-IT", "en-US", "es-ES", "fr-FR", "de-DE"]
+        request.recognitionLanguages = fast ? fastLanguages : accurateLanguages
         request.usesLanguageCorrection = !fast
         try handler.perform([request])
 

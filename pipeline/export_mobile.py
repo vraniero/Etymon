@@ -10,10 +10,9 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from wordfreq import zipf_frequency
+from modern import HAS_FREQUENCY, MODERN, zipf
 
 DATA = Path(__file__).parent / "data"
-MODERN = ("en", "it", "es", "fr", "de")
 UPWARD = ("inherited", "derived", "borrowed", "learned", "calque", "semantic_loan",
           "root", "component")
 
@@ -33,10 +32,20 @@ def main():
     db.executescript("""
         CREATE TEMP TABLE keep (id INTEGER PRIMARY KEY);
     """)
+    ranked = [l for l in MODERN if l in HAS_FREQUENCY]
+    unranked = [l for l in MODERN if l not in HAS_FREQUENCY]
     db.execute(f"""
         INSERT INTO keep SELECT id FROM full.term
-        WHERE lang IN ({','.join('?' * len(MODERN))}) AND has_entry=1 AND zipf >= ?
-    """, (*MODERN, args.zipf))
+        WHERE lang IN ({','.join('?' * len(ranked))}) AND has_entry=1 AND zipf >= ?
+    """, (*ranked, args.zipf))
+    # no frequency list (Belarusian, Estonian): every lemma whose entry gives an ancestry
+    db.execute(f"""
+        INSERT OR IGNORE INTO keep SELECT t.id FROM full.term t
+        WHERE t.lang IN ({','.join('?' * len(unranked))}) AND t.has_entry=1
+          AND EXISTS (SELECT 1 FROM full.edge e WHERE e.src=t.id AND e.inferred=0
+                      AND e.kind IN ('inherited','borrowed','learned','calque','derived'))
+          AND NOT EXISTS (SELECT 1 FROM full.form f WHERE f.lang=t.lang AND f.form=t.word)
+    """, unranked)
     seeds = db.execute("SELECT count(*) FROM keep").fetchone()[0]
 
     # upward closure: ancestors of ancestors, roots of components, ...
@@ -76,7 +85,8 @@ def main():
     """).fetchall()
     db.executemany("INSERT INTO form VALUES (?,?,?)",
                    (r for r in rows
-                    if r[0] in MODERN and r[2] in keep and zipf_frequency(r[1], r[0]) >= args.zipf - 0.5))
+                    if r[0] in HAS_FREQUENCY and r[2] in keep
+                    and zipf(r[1], r[0]) >= args.zipf - 0.5))
 
     db.executescript("""
         CREATE UNIQUE INDEX term_lang_word ON term(lang, word);

@@ -141,7 +141,10 @@ struct HelpView: View {
                 Section {
                     Text("The status line at the bottom counts the words, shared roots and "
                          + "same-meaning links, and shows the scene's detected language. "
-                         + "Supported: English, Italian, Spanish, French, German.")
+                         + "Supported: English, Italian, Spanish, French, German; Russian, Ukrainian, "
+                         + "Belarusian, Bulgarian, Macedonian, Serbo-Croatian; Polish, Czech, "
+                         + "Slovak, Slovene; Romanian, Hungarian, Estonian, Lithuanian, Latvian. "
+                         + "The camera reads the scripts and accents your iOS version supports.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("Etymological data from Wiktionary, CC BY-SA 4.0.")
                         .font(.footnote).foregroundStyle(.secondary)

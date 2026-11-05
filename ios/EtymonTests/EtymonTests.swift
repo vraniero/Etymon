@@ -83,3 +83,35 @@ final class SceneResponseTests: XCTestCase {
         XCTAssertGreaterThan(full.maxLevel, compact.maxLevel)
     }
 }
+
+
+final class OverlayTests: XCTestCase {
+    func testRecognitionFindsWordPositions() throws {
+        let url = try XCTUnwrap(Bundle(for: OverlayTests.self).url(forResource: "sign", withExtension: "png"))
+        let image = try XCTUnwrap(UIImage(contentsOfFile: url.path)?.cgImage)
+        let r = try WordExtractor.recognize(in: image)
+        let boxes = Dictionary(uniqueKeysWithValues: r.words.map { ($0.key, $0.box) })
+        let farmacia = try XCTUnwrap(boxes["farmacia"])
+        let night = try XCTUnwrap(boxes["night"])
+        // FARMACIA is the headline at the top, "night" further down on the right
+        XCTAssertLessThan(farmacia.midY, 0.35)
+        XCTAssertGreaterThan(night.midY, farmacia.maxY)
+        XCTAssertGreaterThan(night.midX, 0.5)
+        XCTAssertNil(boxes["la"], "stopwords are not candidates")
+    }
+
+    func testViewRectAspectFillAndFit() {
+        let box = CGRect(x: 0.25, y: 0.5, width: 0.5, height: 0.1)
+        let image = CGSize(width: 1000, height: 2000)  // portrait frame
+        // fit into a square view: 200 wide image centred, 50pt side bars
+        let fit = OverlayScene.viewRect(box, imageSize: image, in: CGSize(width: 400, height: 400), fill: false)
+        XCTAssertEqual(fit.minX, 150, accuracy: 0.01)
+        XCTAssertEqual(fit.width, 100, accuracy: 0.01)
+        XCTAssertEqual(fit.minY, 200, accuracy: 0.01)
+        // fill: 400 wide image, cropped top and bottom by 200
+        let fill = OverlayScene.viewRect(box, imageSize: image, in: CGSize(width: 400, height: 400), fill: true)
+        XCTAssertEqual(fill.minX, 100, accuracy: 0.01)
+        XCTAssertEqual(fill.minY, 200, accuracy: 0.01)
+        XCTAssertEqual(fill.height, 80, accuracy: 0.01)
+    }
+}

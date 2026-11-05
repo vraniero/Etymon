@@ -1,6 +1,8 @@
 """Etymon API: the words seen in a scene in, the network of shared ancestry out.
 
     POST /scene   {"words": [{"text": "padre", "lang": "it"}, {"text": "paternalistic"}]}
+                  -> etymological connections (shared ancestors) and semantic links
+                     (same meaning across languages: aperta = open)
     GET  /word?text=padri&lang=it
     GET  /health
 
@@ -67,6 +69,12 @@ class Connection(BaseModel):
     deeper: list[Step]  # meet ... oldest known ancestor / reconstructed root
 
 
+class SemanticLink(BaseModel):
+    a: int  # index into words
+    b: int
+    meaning: str  # the shared English meaning: aperta = open
+
+
 class Node(BaseModel):
     id: int
     lang: str
@@ -80,11 +88,13 @@ class WordOut(BaseModel):
     text: str
     lang: str | None
     terms: list[int]  # node ids the text resolves to (lemma, homographs)
+    meanings: list[str] = []  # English meaning keys (empty if unknown)
 
 
 class SceneOut(BaseModel):
     words: list[WordOut]
-    connections: list[Connection]
+    connections: list[Connection]  # shared etymological ancestry
+    semantic: list[SemanticLink]  # same meaning, different languages
     nodes: dict[int, Node]
 
 
@@ -94,24 +104,64 @@ def normalize(text):
     return text.strip(PUNCT)
 
 
-def best_language(db, text, lang):
-    """Resolve text to term ids; without a language, pick the modern language where the
-    word is most frequent (and actually has etymology to show)."""
-    if lang:
-        return lang, resolve(db, lang, text)
-    best = (None, [], -1.0)
+# A word stays in the scene's language unless another language uses it this much more
+# (Zipf points; 1 = ten times as frequent): "night" on an Italian sign is English.
+HINT_MARGIN = 1.0
+
+
+def candidates(db, text):
+    """{lang: (ids, zipf, has_edges)} for every modern language the text resolves in."""
+    out = {}
     for code in MODERN:
         ids = resolve(db, code, text)
         if not ids:
             continue
-        zipf = max((db.execute("SELECT coalesce(zipf, 0) FROM term WHERE id=?", (i,))
-                    .fetchone()[0] for i in ids), default=0)
+        zipf = max(db.execute("SELECT coalesce(zipf, 0) FROM term WHERE id=?", (i,)).fetchone()[0]
+                   for i in ids)
         has_edges = db.execute(f"SELECT 1 FROM edge WHERE src IN ({','.join('?' * len(ids))}) "
                                f"LIMIT 1", ids).fetchone() is not None
-        score = zipf + (10 if has_edges else 0)
-        if score > best[2]:
-            best = (code, ids, score)
-    return best[0], best[1]
+        out[code] = (ids, zipf, has_edges)
+    return out
+
+
+def best_language(db, text, lang, hint=None):
+    """Resolve text to (lang, term ids). An explicit lang is taken as given. Otherwise the
+    scene's hinted language wins unless the word is much more common elsewhere; with no
+    hint, the language where the word is most frequent and has etymology to show."""
+    if lang:
+        return lang, resolve(db, lang, text)
+    found = candidates(db, text)
+    if not found:
+        return None, []
+    best = max(found, key=lambda c: (found[c][2], found[c][1]))
+    if hint in found:
+        if found[best][1] < found[hint][1] + HINT_MARGIN or not found[best][2]:
+            best = hint
+    return best, found[best][0]
+
+
+def meanings_for(db, ids):
+    if not ids or not has_meanings(db):
+        return []
+    rows = db.execute(f"SELECT DISTINCT key FROM meaning WHERE term IN "
+                      f"({','.join('?' * len(ids))}) ORDER BY rowid", ids)
+    return [k for (k,) in rows]
+
+
+def has_meanings(db):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE name='meaning'").fetchone() is not None
+
+
+def semantic_links(words):
+    """Pairs of scene words in different languages that share an English meaning."""
+    links = []
+    for (i, a), (j, b) in combinations(enumerate(words), 2):
+        if not a.meanings or not b.meanings or a.lang == b.lang:
+            continue
+        shared = [k for k in a.meanings if k in b.meanings]
+        if shared:
+            links.append(SemanticLink(a=i, b=j, meaning=shared[0]))
+    return links
 
 
 def nodes_for(db, ids):
@@ -146,10 +196,8 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
         if not text or key in seen:
             continue
         seen.add(key)
-        lang, ids = best_language(db, text, w.lang or body.lang)
-        if not ids and not w.lang and body.lang:
-            lang, ids = best_language(db, text, None)  # e.g. an English word on an Italian sign
-        words.append(WordOut(text=text, lang=lang, terms=ids))
+        lang, ids = best_language(db, text, w.lang, hint=body.lang)
+        words.append(WordOut(text=text, lang=lang, terms=ids, meanings=meanings_for(db, ids)))
         trees.append(climb(db, ids) if ids else {})
 
     connections, used = [], set()
@@ -164,7 +212,8 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
             used.update(n for n, _ in pa + pb + deeper)
     connections.sort(key=lambda c: c.distance)
     used.update(t for w in words for t in w.terms)
-    return SceneOut(words=words, connections=connections, nodes=nodes_for(db, used))
+    return SceneOut(words=words, connections=connections, semantic=semantic_links(words),
+                    nodes=nodes_for(db, used))
 
 
 @app.get("/word")
@@ -178,4 +227,5 @@ def word(text: str, lang: str | None = Query(None), db: sqlite3.Connection = Dep
         line = lineage(db, tid)
         used.update(n for n, _ in line)
         out.append({"term": tid, "lineage": steps(line)})
-    return {"text": text, "lang": lang, "entries": out, "nodes": nodes_for(db, used)}
+    return {"text": text, "lang": lang, "meanings": meanings_for(db, ids), "entries": out,
+            "nodes": nodes_for(db, used)}

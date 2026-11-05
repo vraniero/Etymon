@@ -47,14 +47,27 @@ struct SceneWord: Decodable, Hashable {
     let text: String
     let lang: String?
     let terms: [Int]
+    let meanings: [String]?
+
+    var key: String { text.lowercased() }
+}
+
+/// Two scene words in different languages with the same meaning (aperta = open).
+struct SemanticLink: Decodable, Hashable, Identifiable {
+    let a: Int
+    let b: Int
+    let meaning: String
+    var id: String { "\(a)=\(b)" }
 }
 
 struct SceneResponse: Decodable {
     let words: [SceneWord]
-    let connections: [Connection]
+    let connections: [Connection]  // shared etymological ancestry
+    let semantic: [SemanticLink]?  // same meaning across languages
     let nodes: [String: Node]  // JSON object keys are strings
 
     func node(_ id: Int) -> Node? { nodes[String(id)] }
+    var semanticLinks: [SemanticLink] { semantic ?? [] }
 }
 
 struct WordResponse: Decodable {

@@ -115,13 +115,21 @@ struct GraphLayout {
         width = max((xs.max() ?? 0) - minX, 1)
     }
 
-    /// Groups of scene words linked by shared ancestry, closest first. Words with no
+    /// Every pair of related scene words: shared ancestry first (by distance), then
+    /// same meaning.
+    static func pairs(_ response: SceneResponse) -> [(a: Int, b: Int, distance: Double)] {
+        response.connections.map { ($0.a, $0.b, $0.distance) }
+            + response.semanticLinks.map { ($0.a, $0.b, 1000) }
+    }
+
+    /// Groups of scene words linked by shared ancestry or meaning, closest first. Words with no
     /// connection are not included.
     static func clusters(_ response: SceneResponse) -> [[Int]] {
         var group = Array(response.words.indices)  // union-find parents
         func find(_ i: Int) -> Int { group[i] == i ? i : find(group[i]) }
-        for c in response.connections { group[find(c.a)] = find(c.b) }
-        let connected = Set(response.connections.flatMap { [$0.a, $0.b] })
+        let pairs = Self.pairs(response)
+        for p in pairs { group[find(p.a)] = find(p.b) }
+        let connected = Set(pairs.flatMap { [$0.a, $0.b] })
         var out: [Int: [Int]] = [:], firstSeen: [Int] = []
         for i in wordOrder(response) where connected.contains(i) {
             let root = find(i)
@@ -137,7 +145,7 @@ struct GraphLayout {
         var order: [Int] = []
         var placed = Set<Int>()
         func place(_ i: Int) { if placed.insert(i).inserted { order.append(i) } }
-        let byDistance = response.connections.sorted { $0.distance < $1.distance }
+        let byDistance = pairs(response).sorted { $0.distance < $1.distance }
         // grow clusters: start from the closest pair, pull in words connected to the cluster
         var remaining = byDistance
         while let seed = remaining.first {

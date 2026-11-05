@@ -1,16 +1,26 @@
 import AVFoundation
 import SwiftUI
 
-/// Runs the back camera and recognises text in a frame about once a second.
+/// Runs the back camera. About once a second it reads the frame carefully (new words,
+/// language); in between it re-reads quickly, ~10 times a second, so the positions of
+/// known words follow the camera and the overlay moves with the video.
 final class CameraScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    struct Frame {
+        let recognition: Recognition
+        let imageSize: CGSize  // upright frame size, for mapping boxes onto the preview
+        let isFull: Bool  // careful pass: may add words; otherwise only positions
+    }
+
     let session = AVCaptureSession()
-    var onText: ((String) -> Void)?
+    var onFrame: ((Frame) -> Void)?
     var isPaused = false
 
     private let queue = DispatchQueue(label: "etymon.camera")
-    private var lastScan = Date.distantPast
-    private var isScanning = false
-    private let interval: TimeInterval = 1.0
+    private var lastFull = Date.distantPast
+    private var lastTrack = Date.distantPast
+    private var isBusy = false
+    private let fullInterval: TimeInterval = 1.0
+    private let trackInterval: TimeInterval = 0.08
 
     static var isAvailable: Bool {
         AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil
@@ -45,15 +55,21 @@ final class CameraScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
-        guard !isPaused, !isScanning, Date().timeIntervalSince(lastScan) >= interval,
-              let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        lastScan = Date()
-        isScanning = true
-        defer { isScanning = false }
-        // portrait, back camera: the sensor's top is the device's right
-        guard let text = try? WordExtractor.recognizeText(in: buffer, orientation: .right),
-              !text.isEmpty else { return }
-        DispatchQueue.main.async { [weak self] in self?.onText?(text) }
+        let now = Date()
+        guard !isBusy, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let full = !isPaused && now.timeIntervalSince(lastFull) >= fullInterval
+        guard full || now.timeIntervalSince(lastTrack) >= trackInterval else { return }
+        isBusy = true
+        defer { isBusy = false }
+        if full { lastFull = now } else { lastTrack = now }
+
+        // portrait, back camera: the sensor's top is the device's right, so the upright
+        // image is the buffer rotated: width and height swap
+        let size = CGSize(width: CVPixelBufferGetHeight(buffer), height: CVPixelBufferGetWidth(buffer))
+        guard let recognition = try? WordExtractor.recognize(in: buffer, orientation: .right,
+                                                             fast: !full) else { return }
+        let frame = Frame(recognition: recognition, imageSize: size, isFull: full)
+        DispatchQueue.main.async { [weak self] in self?.onFrame?(frame) }
     }
 }
 
@@ -68,7 +84,7 @@ struct CameraPreview: UIViewRepresentable {
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.previewLayer.session = session
-        view.previewLayer.videoGravity = .resizeAspectFill
+        view.previewLayer.videoGravity = .resizeAspectFill  // OverlayView maps boxes the same way
         return view
     }
 

@@ -11,6 +11,11 @@ struct APIClient {
     var session: URLSession = .shared
 
     static func fromSettings() -> APIClient {
+        // `-api <url>` launch argument (e.g. the Mac's address when run on a phone) is
+        // remembered, so later launches from the home screen use it too
+        if let url = LaunchOptions.value(after: "-api") {
+            UserDefaults.standard.set(url, forKey: baseURLKey)
+        }
         let stored = UserDefaults.standard.string(forKey: baseURLKey) ?? defaultBaseURL
         return APIClient(baseURL: URL(string: stored) ?? URL(string: defaultBaseURL)!)
     }

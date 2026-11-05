@@ -7,7 +7,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: 9P2NQ693B3
     CODE_SIGN_STYLE: Automatic
 targets:
   Etymon:
@@ -41,11 +41,24 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  EtymonUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: EtymonUITests
+        excludes: ["*.png"]
+    dependencies:
+      - target: Etymon
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Etymon
 schemes:
   Etymon:
     build:
       targets:
         Etymon: all
         EtymonTests: [test]
+        EtymonUITests: [test]
     test:
-      targets: [EtymonTests]
+      targets: [EtymonTests, EtymonUITests]

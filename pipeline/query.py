@@ -11,15 +11,22 @@ MODERN = ("en", "it", "es", "fr", "de")
 
 
 def resolve(db, lang, word):
-    """Term ids for a surface word: the entry itself, or the lemma it is a form of."""
-    rows = db.execute("SELECT lemma FROM form WHERE lang=? AND form=?", (lang, word)).fetchall()
-    # the surface word's own entry, unless it is only an inflected form with nothing to show
-    rows += db.execute("SELECT id FROM term t WHERE lang=? AND word=? AND has_entry=1 AND "
-                       "(? = 0 OR EXISTS (SELECT 1 FROM edge WHERE src=t.id))",
-                       (lang, word, len(rows))).fetchall()
+    """Term ids for a surface word. A word with its own etymology is itself (notte, even
+    though one sense makes it short for buonanotte); otherwise the lemma(s) it is a form
+    of (padri -> padre), plus its bare entry if it has one."""
+    own = [r[0] for r in db.execute(
+        "SELECT id FROM term t WHERE lang=? AND word=? AND has_entry=1 AND "
+        "EXISTS (SELECT 1 FROM edge WHERE src=t.id)", (lang, word))]
+    if own:
+        return own
+    rows = [r[0] for r in db.execute("SELECT lemma FROM form WHERE lang=? AND form=?",
+                                     (lang, word))]
+    if not rows:
+        rows = [r[0] for r in db.execute(
+            "SELECT id FROM term WHERE lang=? AND word=? AND has_entry=1", (lang, word))]
     if not rows and word != word.lower():
         return resolve(db, lang, word.lower())
-    return list(dict.fromkeys(r[0] for r in rows))
+    return list(dict.fromkeys(rows))
 
 
 def label(db, tid):

@@ -6,5 +6,6 @@ __pycache__/
 pipeline/data/
 # iOS: build output; the Xcode project is generated from ios/project.yml
 ios/build/
+ios/build-device/
 ios/Etymon.xcodeproj/
 ios/Etymon/Info.plist

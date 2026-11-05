@@ -51,3 +51,22 @@ def test_scene_language_hint_with_fallback():
         {"text": "FARMACIA"}, {"text": "pharmacy"}]}).json()
     assert [w["lang"] for w in r["words"]] == ["it", "en"]
     assert r["connections"]
+
+
+def test_scene_hint_yields_to_much_more_common_language():
+    # "night" exists in Italian (nightclub) but on an Italian sign it is English
+    r = client.post("/scene", json={"lang": "it", "words": [
+        {"text": "notte"}, {"text": "night"}, {"text": "Padre"}]}).json()
+    assert [w["lang"] for w in r["words"]] == ["it", "en", "it"]
+
+
+def test_semantic_links_between_translations():
+    # aperta and open share no ancestry (Latin apertus vs Germanic *upanaz) but mean the same
+    r = client.post("/scene", json={"lang": "it", "words": [
+        {"text": "Aperta"}, {"text": "Open"}, {"text": "notte"}, {"text": "night"}]}).json()
+    links = {(l["a"], l["b"]): l["meaning"] for l in r["semantic"]}
+    assert links.get((0, 1)) == "open"
+    assert links.get((2, 3)) == "night"
+    # notte and night are also related by descent (PIE *nókʷts)
+    assert any({c["a"], c["b"]} == {2, 3} for c in r["connections"])
+    assert not any({c["a"], c["b"]} == {0, 1} for c in r["connections"])

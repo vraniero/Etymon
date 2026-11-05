@@ -17,7 +17,9 @@ struct NetworkView: View {
             VStack(spacing: 8) {
                 ForEach(clusters, id: \.self) { cluster in
                     ClusterGraph(layout: GraphLayout(response, compact: compact, only: Set(cluster)),
-                                 response: response, onSelect: onSelect)
+                                 response: response,
+                                 semantic: response.semanticLinks.filter { cluster.contains($0.a) },
+                                 onSelect: onSelect)
                     Divider().padding(.horizontal, 40)
                 }
                 if !loose.isEmpty {
@@ -44,6 +46,7 @@ struct NetworkView: View {
 private struct ClusterGraph: View {
     let layout: GraphLayout
     let response: SceneResponse
+    let semantic: [SemanticLink]
     var onSelect: (GraphLayout.Key) -> Void
 
     private let levelHeight: CGFloat = 70
@@ -51,8 +54,9 @@ private struct ClusterGraph: View {
     private let margin = CGSize(width: 60, height: 28)
 
     var body: some View {
+        let below: CGFloat = semantic.isEmpty ? 0 : 44  // room for the meaning arcs
         let size = CGSize(width: layout.width * slotWidth + margin.width * 2,
-                          height: CGFloat(layout.maxLevel) * levelHeight + margin.height * 2)
+                          height: CGFloat(layout.maxLevel) * levelHeight + margin.height * 2 + below)
         ScrollView(.horizontal, showsIndicators: false) {
             ZStack(alignment: .topLeading) {
                 Canvas { context, _ in
@@ -69,11 +73,34 @@ private struct ClusterGraph: View {
                                        style: StrokeStyle(lineWidth: 2,
                                                           dash: link.kind == "borrowed" ? [5, 4] : []))
                     }
+                    // same meaning: dashed green arcs under the two words
+                    for link in semantic {
+                        guard let a = layout.items[.word(link.a)], let b = layout.items[.word(link.b)] else {
+                            continue
+                        }
+                        let p = point(a, in: size, below: below), q = point(b, in: size, below: below)
+                        var path = Path()
+                        path.move(to: CGPoint(x: p.x, y: p.y + 20))
+                        path.addQuadCurve(to: CGPoint(x: q.x, y: q.y + 20),
+                                          control: CGPoint(x: (p.x + q.x) / 2, y: p.y + 20 + below))
+                        context.stroke(path, with: .color(.green),
+                                       style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    }
                 }
                 ForEach(Array(layout.items.values)) { item in
                     NodeLabel(item: item, response: response)
-                        .position(point(item, in: size))
+                        .position(point(item, in: size, below: below))
                         .onTapGesture { onSelect(item.key) }
+                }
+                ForEach(semantic) { link in
+                    if let a = layout.items[.word(link.a)], let b = layout.items[.word(link.b)] {
+                        let p = point(a, in: size, below: below), q = point(b, in: size, below: below)
+                        Text("= \(link.meaning)")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.green))
+                            .position(x: (p.x + q.x) / 2, y: p.y + 20 + below * 0.55)
+                    }
                 }
             }
             .frame(width: size.width, height: size.height)
@@ -81,9 +108,9 @@ private struct ClusterGraph: View {
         }
     }
 
-    private func point(_ item: GraphLayout.Item, in size: CGSize) -> CGPoint {
+    private func point(_ item: GraphLayout.Item, in size: CGSize, below: CGFloat = 0) -> CGPoint {
         CGPoint(x: margin.width + item.x * slotWidth,
-                y: size.height - margin.height - CGFloat(item.level) * levelHeight)
+                y: size.height - margin.height - below - CGFloat(item.level) * levelHeight)
     }
 }
 

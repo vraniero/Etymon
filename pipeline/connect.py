@@ -15,13 +15,17 @@ from query import label, resolve
 # Cost of climbing one edge. Stated links are cheaper than ones read off a chain, and
 # meeting at a shared word beats meeting only at a reconstructed root.
 COST = {"inherited": 1.0, "borrowed": 1.0, "learned": 1.0, "calque": 1.2,
-        "semantic_loan": 1.5, "derived": 1.0, "component": 1.0, "root": 2.0}
+        "semantic_loan": 1.5, "derived": 1.0, "component": 1.0, "root": 6.0}
 INFERRED_PENALTY = 0.5
-MAX_COST = 12
+MAX_COST = 16
 
 
 def is_affix(word):
-    # "-ism", "re-": shared by thousands of words, so not a meaningful connection
+    """"-ism", "re-", "*-tḗr": shared by thousands of words, so not a meaningful connection.
+    Reconstructed stems and roots are cited with a trailing hyphen (*twai-, *peh₂-) and
+    are real ancestors, not affixes."""
+    if word.startswith("*"):
+        return word[1:].startswith("-")
     return word.startswith("-") or word.endswith("-")
 
 

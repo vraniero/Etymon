@@ -3,6 +3,21 @@ import Foundation
 import NaturalLanguage
 import Vision
 
+/// A word found in an image and where it is: normalized to the upright image,
+/// origin top-left (0...1 on both axes).
+struct SeenWord: Hashable {
+    let text: String
+    let box: CGRect
+    var key: String { text.lowercased() }
+}
+
+/// What one recognition pass found: all the text (for language detection and new
+/// words) and each candidate word with its position (for the overlay).
+struct Recognition {
+    var text = ""
+    var words: [SeenWord] = []
+}
+
 /// Turns recognised text into the candidate words of a scene.
 enum WordExtractor {
     static let languages = ["it", "en", "es", "fr", "de"]
@@ -25,19 +40,36 @@ enum WordExtractor {
         "für", "auf", "ist", "nicht", "zu", "im", "am",
     ]
 
-    /// Words from a block of text: letters only, split at apostrophes (l'eau -> eau),
-    /// stopwords and very short tokens dropped, order of first appearance kept.
+    /// Runs of letters in a string that are worth looking up (apostrophes split: l'eau -> eau).
+    static func tokens(in text: String) -> [(word: String, range: Range<String.Index>)] {
+        var out: [(String, Range<String.Index>)] = []
+        var start: String.Index?
+        var i = text.startIndex
+        func flush(_ end: String.Index) {
+            if let s = start {
+                let word = String(text[s..<end])
+                if word.count >= minLength && !stopwords.contains(word.lowercased()) {
+                    out.append((word, s..<end))
+                }
+            }
+            start = nil
+        }
+        while i < text.endIndex {
+            if text[i].isLetter {
+                if start == nil { start = i }
+            } else {
+                flush(i)
+            }
+            i = text.index(after: i)
+        }
+        flush(text.endIndex)
+        return out
+    }
+
+    /// Words from a block of text, duplicates removed, order of first appearance kept.
     static func words(in text: String) -> [String] {
         var seen = Set<String>()
-        var out: [String] = []
-        let tokens = text.components(separatedBy: CharacterSet.letters.inverted)
-        for token in tokens where token.count >= minLength {
-            let key = token.lowercased()
-            if stopwords.contains(key) || seen.contains(key) { continue }
-            seen.insert(key)
-            out.append(token)
-        }
-        return out
+        return tokens(in: text).map(\.word).filter { seen.insert($0.lowercased()).inserted }
     }
 
     /// Most likely language of the whole scene, among the supported ones.
@@ -50,34 +82,42 @@ enum WordExtractor {
         return lang.rawValue
     }
 
-    /// Recognise text in an image (a camera frame or a photo).
-    static func recognizeText(in image: CGImage,
-                              orientation: CGImagePropertyOrientation = .up,
-                              fast: Bool = false) throws -> String {
+    /// Recognise text and word positions in an image. `fast` trades accuracy for speed,
+    /// for re-locating known words between full passes.
+    static func recognize(_ handler: VNImageRequestHandler, fast: Bool) throws -> Recognition {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = fast ? .fast : .accurate
         request.recognitionLanguages = ["it-IT", "en-US", "es-ES", "fr-FR", "de-DE"]
-        request.usesLanguageCorrection = true
-        try VNImageRequestHandler(cgImage: image, orientation: orientation).perform([request])
-        return lines(from: request.results)
+        request.usesLanguageCorrection = !fast
+        try handler.perform([request])
+
+        var result = Recognition()
+        var lines: [String] = []
+        var seen = Set<String>()
+        for observation in request.results ?? [] {
+            guard let candidate = observation.topCandidates(1).first,
+                  candidate.confidence >= (fast ? 0.3 : 0.4) else { continue }
+            lines.append(candidate.string)
+            for (word, range) in tokens(in: candidate.string) {
+                guard seen.insert(word.lowercased()).inserted,
+                      let box = try? candidate.boundingBox(for: range)?.boundingBox else { continue }
+                // Vision: origin bottom-left; overlay: origin top-left
+                result.words.append(SeenWord(text: word, box: CGRect(
+                    x: box.minX, y: 1 - box.maxY, width: box.width, height: box.height)))
+            }
+        }
+        result.text = lines.joined(separator: "\n")
+        return result
     }
 
-    static func recognizeText(in pixelBuffer: CVPixelBuffer,
-                              orientation: CGImagePropertyOrientation) throws -> String {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.recognitionLanguages = ["it-IT", "en-US", "es-ES", "fr-FR", "de-DE"]
-        request.usesLanguageCorrection = true
-        try VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation)
-            .perform([request])
-        return lines(from: request.results)
+    static func recognize(in image: CGImage, orientation: CGImagePropertyOrientation = .up,
+                          fast: Bool = false) throws -> Recognition {
+        try recognize(VNImageRequestHandler(cgImage: image, orientation: orientation), fast: fast)
     }
 
-    private static func lines(from results: [VNRecognizedTextObservation]?) -> String {
-        (results ?? [])
-            .compactMap { $0.topCandidates(1).first }
-            .filter { $0.confidence >= 0.4 }
-            .map(\.string)
-            .joined(separator: "\n")
+    static func recognize(in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation,
+                          fast: Bool) throws -> Recognition {
+        try recognize(VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation),
+                      fast: fast)
     }
 }

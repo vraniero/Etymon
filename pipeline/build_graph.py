@@ -354,6 +354,13 @@ class Graph:
                     if part and len(part.split()) <= 2:
                         self.edge(head, self.node(lang, part), "component", 0)
 
+        # Descendants listed on historical and reconstructed entries (PIE *ph₂tḗr ->
+        # Latin pater, Proto-Germanic *fadēr, Sanskrit pitṛ́...). Stated on the ancestor's
+        # page, so inferred for the descendant: its own etymology, if any, still wins.
+        for child_lang, child_word, parent_lang, parent_word, kind in e.get("d") or []:
+            parent = head if parent_lang is None else self.node(parent_lang, parent_word)
+            self.edge(self.node(child_lang, child_word), parent, kind, 1)
+
 
 def read_slim(path):
     with gzip.open(path, "rt", encoding="utf-8") as f:

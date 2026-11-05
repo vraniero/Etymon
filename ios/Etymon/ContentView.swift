@@ -10,16 +10,19 @@ struct ContentView: View {
     enum Selection: Identifiable {
         case connection(Connection)
         case word(text: String, lang: String?)
+        case graph
         var id: String {
             switch self {
             case .connection(let c): return "c\(c.id)"
             case .word(let t, let l): return "w\(t)\(l ?? "")"
+            case .graph: return "graph"
             }
         }
     }
 
     @State private var model = SceneModel()
-    @State private var source: Source = CameraScanner.isAvailable ? .camera : .type
+    @State private var source: Source = LaunchOptions.source
+        ?? (CameraScanner.isAvailable ? .camera : .type)
     @State private var selection: Selection?
     @State private var showSettings = false
     @State private var fullPaths = false
@@ -32,14 +35,20 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal).padding(.bottom, 8)
+                .onChange(of: source) { model.reset() }
 
-                input
-                    .frame(maxWidth: .infinity)
-                    .frame(height: source == .type ? 130 : 240)
-                    .clipped()
-
-                status
-                network
+                switch source {
+                case .camera:
+                    CameraInput(model: model, onSelect: select)
+                    status
+                case .photo:
+                    PhotoInput(model: model, onSelect: select)
+                    status
+                case .type:
+                    TypeInput(model: model).frame(height: 130)
+                    status
+                    graph
+                }
             }
             .navigationTitle("Etymon")
             .navigationBarTitleDisplayMode(.inline)
@@ -62,19 +71,18 @@ struct ContentView: View {
                         }
                     case .word(let text, let lang):
                         WordDetail(text: text, lang: lang)
+                    case .graph:
+                        VStack(spacing: 0) {
+                            Toggle("Full paths", isOn: $fullPaths).padding(.horizontal)
+                            graph
+                        }
+                        .navigationTitle("Network")
+                        .navigationBarTitleDisplayMode(.inline)
                     }
                 }
                 .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
-        }
-    }
-
-    @ViewBuilder private var input: some View {
-        switch source {
-        case .camera: CameraInput(model: model)
-        case .photo: PhotoInput(model: model)
-        case .type: TypeInput(model: model)
         }
     }
 
@@ -85,33 +93,41 @@ struct ContentView: View {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
             } else if model.words.isEmpty {
-                Text("Point at some text, pick a photo, or type a few words.")
+                Text(source == .camera ? "Point at some text." :
+                     source == .photo ? "Pick a photo with some text." : "Type a few words.")
             } else {
-                let count = model.response?.connections.count ?? 0
-                Text("\(model.words.count) words · \(count) connection\(count == 1 ? "" : "s")"
+                let roots = model.response?.connections.count ?? 0
+                let meanings = model.response?.semanticLinks.count ?? 0
+                Text("\(model.words.count) words · \(roots) shared roots · \(meanings) same meaning"
                      + (model.language.map { " · \($0)" } ?? ""))
             }
             Spacer()
-            if model.response?.connections.isEmpty == false {
+            if source == .type, model.response?.connections.isEmpty == false {
                 Toggle("Full paths", isOn: $fullPaths)
                     .toggleStyle(.button).controlSize(.mini)
+                    .accessibilityIdentifier("fullPaths")
+            } else if source != .type, model.response != nil {
+                Button("Graph", systemImage: "point.3.connected.trianglepath.dotted") {
+                    selection = .graph
+                }
+                .controlSize(.mini).buttonStyle(.bordered)
+                .accessibilityIdentifier("showGraph")
             }
         }
         .font(.caption).foregroundStyle(.secondary)
         .padding(.horizontal).padding(.vertical, 6)
     }
 
-    @ViewBuilder private var network: some View {
+    @ViewBuilder private var graph: some View {
         if let response = model.response, !response.words.isEmpty {
-            NetworkView(response: response, compact: !fullPaths) { key in
-                select(key, in: response)
-            }
+            NetworkView(response: response, compact: !fullPaths, onSelect: select)
         } else {
             Spacer()
         }
     }
 
-    private func select(_ key: GraphLayout.Key, in response: SceneResponse) {
+    private func select(_ key: GraphLayout.Key) {
+        guard let response = model.response else { return }
         switch key {
         case .word(let i):
             // a word that is a meeting point (caffè for coffee) shows the connection
@@ -130,26 +146,34 @@ struct ContentView: View {
     }
 }
 
+/// Live video with the network drawn over it, following the words as the camera moves.
 private struct CameraInput: View {
     let model: SceneModel
+    var onSelect: (GraphLayout.Key) -> Void
     @State private var scanner = CameraScanner()
     @State private var paused = false
 
     var body: some View {
         if CameraScanner.isAvailable {
-            CameraPreview(session: scanner.session)
-                .overlay(alignment: .bottomTrailing) {
-                    Button(paused ? "Resume" : "Hold", systemImage: paused ? "play.fill" : "pause.fill") {
-                        paused.toggle()
-                        scanner.isPaused = paused
-                    }
-                    .buttonStyle(.borderedProminent).padding(10)
+            ZStack(alignment: .bottomTrailing) {
+                CameraPreview(session: scanner.session)
+                if let response = model.response {
+                    OverlayView(response: response, model: model, fill: true, onSelect: onSelect)
                 }
-                .onAppear {
-                    scanner.onText = { model.add(text: $0) }
-                    scanner.start()
+                Button(paused ? "Collect" : "Hold", systemImage: paused ? "plus.viewfinder" : "pause.fill") {
+                    paused.toggle()
+                    scanner.isPaused = paused  // still tracks positions, stops adding words
                 }
-                .onDisappear { scanner.stop() }
+                .buttonStyle(.borderedProminent).padding(12)
+            }
+            .clipped()
+            .onAppear {
+                scanner.onFrame = { frame in
+                    model.see(frame.recognition, imageSize: frame.imageSize, full: frame.isFull)
+                }
+                scanner.start()
+            }
+            .onDisappear { scanner.stop() }
         } else {
             ContentUnavailableView("No camera", systemImage: "camera.fill",
                                    description: Text("Use Photo or Type in the simulator."))
@@ -157,46 +181,82 @@ private struct CameraInput: View {
     }
 }
 
+/// A photo with the network drawn over it.
 private struct PhotoInput: View {
     let model: SceneModel
+    var onSelect: (GraphLayout.Key) -> Void
     @State private var item: PhotosPickerItem?
     @State private var image: UIImage?
     @State private var reading = false
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
+            Color.black
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                // centred, aspect-fit: OverlayView maps the word boxes the same way
+                Image(uiImage: image).resizable().scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("pickedPhoto")
+                if let response = model.response {
+                    OverlayView(response: response, model: model, fill: false, onSelect: onSelect)
+                }
             }
             PhotosPicker(selection: $item, matching: .images) {
                 Label(image == nil ? "Choose a photo" : "Another photo", systemImage: "photo")
             }
             .buttonStyle(.borderedProminent)
             .frame(maxHeight: .infinity, alignment: image == nil ? .center : .bottom)
-            .padding(10)
-            if reading { ProgressView() }
+            .padding(12)
+            if reading { ProgressView().tint(.white).frame(maxHeight: .infinity) }
         }
+        .clipped()
         .onChange(of: item) { _, newItem in
             guard let newItem else { return }
             Task {
-                reading = true
-                defer { reading = false }
                 guard let data = try? await newItem.loadTransferable(type: Data.self),
-                      let ui = UIImage(data: data), let cg = ui.cgImage else { return }
-                image = ui
-                let text = await Task.detached {
-                    (try? WordExtractor.recognizeText(in: cg, orientation: ui.cgOrientation)) ?? ""
-                }.value
-                model.reset()
-                model.add(text: text)
+                      let ui = UIImage(data: data) else { return }
+                await read(ui)
+            }
+        }
+        .task {
+            // `-photo <path>` launch argument: read an image file as if it had been picked
+            if image == nil, let path = LaunchOptions.photoPath, let ui = UIImage(contentsOfFile: path) {
+                await read(ui)
             }
         }
     }
+
+    private func read(_ ui: UIImage) async {
+        guard let cg = ui.cgImage else { return }
+        reading = true
+        defer { reading = false }
+        image = ui
+        let orientation = ui.cgOrientation
+        let recognition = await Task.detached {
+            (try? WordExtractor.recognize(in: cg, orientation: orientation)) ?? Recognition()
+        }.value
+        model.reset()
+        model.see(recognition, imageSize: ui.size, full: true, still: true)
+    }
+}
+
+/// Launch arguments for demos and UI tests: `-source photo|type|camera`, `-photo <path>`,
+/// `-demo` (connect the sample typed text).
+enum LaunchOptions {
+    static func value(after flag: String) -> String? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+    static var source: ContentView.Source? {
+        value(after: "-source").flatMap { ContentView.Source(rawValue: $0.capitalized) }
+    }
+    static var photoPath: String? { value(after: "-photo") }
 }
 
 private struct TypeInput: View {
     let model: SceneModel
-    @State private var text = "Farmacia aperta tutta la notte, padre\npaternalistic nocturnal pharmacy"
+    @State private var text = "Farmacia aperta tutta la notte, padre\npaternalistic nocturnal pharmacy open night"
 
     var body: some View {
         VStack {

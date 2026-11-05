@@ -44,6 +44,29 @@ def etymology_prose(text, word):
     return text
 
 
+DESCENDANT_KIND = {"borrowed": "borrowed", "learned": "learned", "semi-learned": "learned",
+                   "calque": "calque", "partial calque": "calque",
+                   "semantic loan": "semantic_loan"}
+MAX_DESCENDANTS = 3000
+
+
+def descendants(tree, parent=None, out=None):
+    """Flatten a descendants tree to [child_lang, child_word, parent_lang, parent_word, kind]
+    links; parent None means the entry itself. Reconstructed and historical entries list
+    their descendants across languages — the links that surface shared roots."""
+    out = [] if out is None else out
+    for d in tree or []:
+        lang, word = d.get("lang_code"), d.get("word")
+        if lang and word and len(out) < MAX_DESCENDANTS:
+            tags = set(d.get("raw_tags") or []) | set(d.get("tags") or [])
+            kind = next((DESCENDANT_KIND[t] for t in tags if t in DESCENDANT_KIND), "inherited")
+            out.append([lang, word, *(parent or (None, None)), kind])
+            descendants(d.get("descendants"), (lang, word), out)
+        else:
+            descendants(d.get("descendants"), parent, out)
+    return out
+
+
 def slim(entry):
     templates = []
     for t in entry.get("etymology_templates") or []:
@@ -60,14 +83,19 @@ def slim(entry):
         # inflected/alternative forms point at their lemma ("padri" -> "padre")
         for link in (sense.get("form_of") or []) + (sense.get("alt_of") or []):
             lemma = lemma or link.get("word")
+    word = entry.get("word")
+    # reconstructions are cited with an asterisk ("*frijaz"); their page names have none
+    if (entry.get("original_title") or "").startswith("Reconstruction:") and not word.startswith("*"):
+        word = "*" + word
     return {
-        "w": entry.get("word"),
+        "w": word,
         "l": entry.get("lang_code"),
         "p": entry.get("pos"),
         "g": gloss[:200],
-        "e": etymology_prose(entry.get("etymology_text") or "", entry.get("word"))[:3000],
+        "e": etymology_prose(entry.get("etymology_text") or "", word)[:3000],
         "t": templates,
         "f": lemma,
+        "d": descendants(entry.get("descendants")),
     }
 
 
@@ -77,7 +105,7 @@ def fetch(language):
         print(f"{language}: already done", flush=True)
         return
     raw_path = DATA / f"{language}.raw.jsonl"
-    url = URL.format(language.replace(" ", "%20"), language.replace(" ", ""))
+    url = URL.format(language.replace(" ", "%20"), language.replace(" ", "").replace("-", ""))
     # Download to disk first so a dropped connection resumes instead of restarting.
     # curl also uses the system certificate store (python.org builds often lack one).
     subprocess.run(["curl", "-sSfL", "-C", "-", "--retry", "20", "--retry-all-errors",

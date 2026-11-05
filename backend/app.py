@@ -155,9 +155,12 @@ def normalize(text):
     return text.strip(PUNCT)
 
 
-# A word stays in the scene's language unless another language uses it this much more
-# (Zipf points; 1 = ten times as frequent): "night" on an Italian sign is English.
+# A word stays in the scene's language unless English uses it this much more (Zipf
+# points; 1 = ten times as frequent): "night" on an Italian sign is English. Only English,
+# the lingua franca of signs: among twenty languages a short word is nearly always common
+# somewhere else too (Hungarian tej, milk, is Polish for "this").
 HINT_MARGIN = 1.0
+HINT_YIELDS_TO = "en"
 
 
 def candidates(db, text):
@@ -186,8 +189,9 @@ def best_language(db, text, lang, hint=None):
         return None, []
     best = max(found, key=lambda c: (found[c][2], found[c][1]))
     if hint in found:
-        if found[best][1] < found[hint][1] + HINT_MARGIN or not found[best][2]:
-            best = hint
+        en = found.get(HINT_YIELDS_TO)
+        best = HINT_YIELDS_TO if (hint != HINT_YIELDS_TO and en and en[2]
+                                  and en[1] >= found[hint][1] + HINT_MARGIN) else hint
     return best, found[best][0]
 
 

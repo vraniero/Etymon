@@ -75,6 +75,34 @@ def test_scene_hint_yields_to_much_more_common_language():
     assert [w["lang"] for w in r["words"]] == ["it", "en", "it"]
 
 
+def test_hint_keeps_homographs_from_other_languages():
+    # tej is milk in Hungarian and a much more common word in Polish ("this")
+    r = client.post("/scene", json={"lang": "hu", "words": [
+        {"text": "víz"}, {"text": "tej"}]}).json()
+    assert [w["lang"] for w in r["words"]] == ["hu", "hu"]
+
+
+def test_cyrillic_scene_links_to_english():
+    r = client.post("/scene", json={"lang": "ru", "words": [
+        {"text": "Вода"}, {"text": "молоко"}, {"text": "water"}, {"text": "milk"}]}).json()
+    assert [w["lang"] for w in r["words"]] == ["ru", "ru", "en", "en"]
+    assert meet_word(r, 0, 2) == ("ine-pro", "*wédōr")
+    links = {(l["a"], l["b"]): l["meaning"] for l in r["semantic"]}
+    assert links.get((1, 3)) == "milk"
+
+
+def test_central_european_scenes():
+    r = client.post("/scene", json={"words": [{"text": "apă", "lang": "ro"},
+                                              {"text": "acqua", "lang": "it"}]}).json()
+    assert meet_word(r, 0, 1) == ("la", "aqua")
+    r = client.post("/scene", json={"words": [{"text": "víz", "lang": "hu"},
+                                              {"text": "vesi", "lang": "et"}]}).json()
+    assert meet_word(r, 0, 1) == ("urj-pro", "*wete")
+    # Serbo-Croatian descendants are listed with tone marks (vòda); they reach the entry
+    r = client.get("/word", params={"text": "voda", "lang": "sh"}).json()
+    assert any(n["lang"] == "sla-pro" for n in r["nodes"].values())
+
+
 def test_semantic_links_between_translations():
     # aperta and open share no ancestry (Latin apertus vs Germanic *upanaz) but mean the same
     r = client.post("/scene", json={"lang": "it", "words": [

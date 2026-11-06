@@ -163,8 +163,21 @@ def find_word(text, cursor, a):
     return None
 
 
+SENTENCE_BREAK = re.compile(r"[.;]\s+(?=[A-Z])|;")
+CHAIN_LEAD = re.compile(r"\s*(?:ultimately |itself |in turn )?(?:from|<)\b", re.I)
+
+
 def classify_gap(gap):
     """How the next etymon relates to the previous one, judging by the words between them."""
+    gap = PAREN.sub("", gap)  # glosses (“the art of creating drugs; a drug”) are no wording
+    # A new sentence ends the chain unless it carries it on ("... Ultimately from X"):
+    # "*bi- + *innan. The form is also Middle High German binnen" is not *bi- < binnen.
+    sentences = SENTENCE_BREAK.split(gap)
+    if len(sentences) > 1:
+        return "chain" if CHAIN_LEAD.match(sentences[-1]) else "break"
+    # "A + B": B is A's fellow component, not its source
+    if " + " in gap:
+        return "break"
     g = " " + gap.lower() + " "
     if " from " in g or "<" in g or " via " in g or " ultimately " in g:
         return "chain"
@@ -358,7 +371,20 @@ class Graph:
                         self.edge(p, src, kind, int(p != head))
             parents = group
 
+    @staticmethod
+    def unshift(t):
+        """Templates written with a leading modifier ({{surf|+suf|en|talk|ing}}) have their
+        arguments one place later: drop the modifier so the language is argument 1 again,
+        and read +pre/+suf/+con as the matching affix template (talk + -ing, not "en")."""
+        mod = t["a"].get("1") or ""
+        if not mod.startswith("+"):
+            return t
+        a = {(str(int(k) - 1) if k.isdigit() else k): v for k, v in t["a"].items() if k != "1"}
+        name = {"+pre": "prefix", "+suf": "suffix", "+con": "confix"}.get(mod, t["n"])
+        return {"n": name, "a": a}
+
     def add_entry(self, e):
+        e = {**e, "t": [self.unshift(t) for t in e["t"]]}
         lang, word = e["l"], e["w"]
         head = self.node(lang, word)
         if head is None:

@@ -168,3 +168,13 @@ def test_search_depth_bounds():
     words = [{"text": "padre", "lang": "it"}]
     assert client.post("/scene", json={"words": words, "max_cost": 0}).status_code == 422
     assert client.post("/scene", json={"words": words, "max_cost": 41}).status_code == 422
+
+
+def test_no_false_link_through_template_flags_or_compound_parts():
+    # {{surf|+suf|en|talk|ing}} once made "en" (the language code) a part of talking, and
+    # "*bi- + *innan. The form is also Middle High German binnen" made *bi- come from binnen
+    r = client.post("/scene", json={"lang": "en", "max_cost": 20, "words": [
+        {"text": "talking"}, {"text": "about"}]}).json()
+    assert r["connections"] == []
+    w = client.get("/word", params={"text": "talking", "lang": "en"}).json()
+    assert ("en", "en") not in {(n["lang"], n["word"]) for n in w["nodes"].values()}

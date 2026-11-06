@@ -192,3 +192,62 @@ final class ARNetworkLayoutTests: XCTestCase {
         XCTAssertTrue(arc.words[2]!.linked)
     }
 }
+
+final class ARBranchLayoutTests: XCTestCase {
+    /// notte and nocturnal both come through Latin nox (5) to the root (10); the root's
+    /// older ancestry is 20, then 21.
+    private func response() -> SceneResponse {
+        func node(_ id: Int) -> Node {
+            Node(id: id, lang: "la", language: "Latin", word: "n\(id)", gloss: nil,
+                 reconstructed: false, lat: nil, lon: nil)
+        }
+        let words = [SceneWord(text: "notte", lang: "it", terms: [1], meanings: nil),
+                     SceneWord(text: "nocturnal", lang: "en", terms: [2], meanings: nil)]
+        let c = Connection(a: 0, b: 1, meet: 10, distance: 4, depth: 4,
+                           pathA: [Step(node: 1, kind: nil), Step(node: 5, kind: "inherited"),
+                                   Step(node: 10, kind: "inherited")],
+                           pathB: [Step(node: 2, kind: nil), Step(node: 6, kind: "borrowed"),
+                                   Step(node: 5, kind: "derived"), Step(node: 10, kind: "inherited")],
+                           deeper: [Step(node: 20, kind: "inherited"), Step(node: 21, kind: "root")])
+        return SceneResponse(search: nil, words: words, connections: [c], semantic: [],
+                             nodes: Dictionary(uniqueKeysWithValues: [1, 2, 5, 6, 10, 20, 21].map { ("\($0)", node($0)) }))
+    }
+
+    private let anchors: [String: ARWordAnchor] = [
+        "notte": ARWordAnchor(position: SIMD3(-0.2, 1, -1), distance: 1, seen: Date()),
+        "nocturnal": ARWordAnchor(position: SIMD3(0.2, 1, -1), distance: 1, seen: Date()),
+    ]
+
+    func testBranchShowsEveryAncestorOnceAndTheOlderOnesAbove() throws {
+        let r = response()
+        let base = ARNetworkLayout(response: r, anchors: anchors)
+        let branch = try XCTUnwrap(ARBranchLayout(meet: 10, response: r, layout: base))
+        XCTAssertEqual(branch.words, [0, 1])
+        // nox (5) is shared: one card, both paths run through it
+        XCTAssertEqual(branch.cards.map(\.node).sorted(), [5, 6, 20, 21])
+        XCTAssertEqual(Set(branch.segments.map(\.id)).count, branch.segments.count)
+        XCTAssertEqual(branch.segments.filter { $0.id.hasSuffix(">5") }.count, 2)
+
+        // the root rises to make room for the longest path (two ancestors)
+        let baseRoot = try XCTUnwrap(base.roots.first).position
+        XCTAssertEqual(branch.rootPosition.y, baseRoot.y + 2 * ARBranchLayout.step, accuracy: 1e-5)
+        let y = Dictionary(uniqueKeysWithValues: branch.cards.map { ($0.node, $0.position.y) })
+        XCTAssertGreaterThan(y[5]!, 1)
+        XCTAssertLessThan(y[5]!, branch.rootPosition.y)
+        XCTAssertGreaterThan(y[20]!, branch.rootPosition.y)
+        XCTAssertGreaterThan(y[21]!, y[20]!)
+        XCTAssertEqual(branch.segments.first { $0.id == "w1>6" }?.kind, "borrowed")
+    }
+
+    func testNoBranchForARootNotInTheScene() {
+        let r = response()
+        XCTAssertNil(ARBranchLayout(meet: 99, response: r, layout: ARNetworkLayout(response: r, anchors: anchors)))
+    }
+
+    func testTapDistanceToALine() {
+        let a = CGPoint(x: 0, y: 0), b = CGPoint(x: 100, y: 0)
+        XCTAssertEqual(ARGeometry.distance(from: CGPoint(x: 50, y: 10), toSegment: a, b), 10, accuracy: 1e-6)
+        XCTAssertEqual(ARGeometry.distance(from: CGPoint(x: 130, y: 40), toSegment: a, b), 50, accuracy: 1e-6)
+        XCTAssertEqual(ARGeometry.distance(from: CGPoint(x: 3, y: 4), toSegment: a, a), 5, accuracy: 1e-6)
+    }
+}

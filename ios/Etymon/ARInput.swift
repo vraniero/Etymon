@@ -18,6 +18,10 @@ struct ARInput: View {
     var onExplore: () -> Void
     @State private var paused = false
     @State private var conversation = Conversation()
+    /// One branch picked out by tapping a line; nil shows the whole network.
+    @State private var focus: ARFocus?
+    /// False until the camera's first frame: until then a placeholder, not a black screen.
+    @State private var cameraReady = false
 
     static var isAvailable: Bool { ARWorldTrackingConfiguration.isSupported }
 
@@ -27,12 +31,23 @@ struct ARInput: View {
                 ARNetworkView(response: model.response?.showing(layers),
                               sceneIsEmpty: model.words.isEmpty, reading: !paused && !exploring,
                               running: !exploring, conversation: conversation,
-                              personas: conversation.personas, onSelect: onSelect) { read in
+                              personas: conversation.personas, focus: $focus, ready: $cameraReady,
+                              onSelect: onSelect) { read in
                     model.see(read.recognition, imageSize: read.imageSize, full: true,
                               picture: read.picture)
                 }
                 .accessibilityIdentifier("arView")
+                if !cameraReady { ARStarting().transition(.opacity) }
                 ConversationOverlay(conversation: conversation)
+                if focus != nil {
+                    Button("Show all", systemImage: "point.3.filled.connected.trianglepath.dotted") {
+                        focus = nil
+                    }
+                    .buttonStyle(.borderedProminent).tint(.orange)
+                    .padding(.top, 44)  // below the speakers' chips
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .accessibilityIdentifier("showAll")
+                }
                 HStack {
                     Button(conversation.listening ? "Stop listening" : "Listen",
                            systemImage: conversation.listening ? "mic.fill" : "mic.slash") {
@@ -57,7 +72,9 @@ struct ARInput: View {
             .onAppear {
                 conversation.onHeard = { [model] text, lang in model.hear(text, lang: lang) }
             }
-            .onChange(of: model.words.isEmpty) { _, empty in if empty { conversation.clearWords() } }
+            .onChange(of: model.words.isEmpty) { _, empty in
+                if empty { conversation.clearWords(); focus = nil }
+            }
             .onChange(of: exploring) { _, isExploring in if isExploring { conversation.stop() } }
             .onDisappear { conversation.stop() }
         } else {
@@ -81,6 +98,8 @@ struct ARNetworkView: UIViewRepresentable {
     let conversation: Conversation
     /// Passed so the view updates when someone speaks or moves to another place.
     let personas: [Conversation.Persona]
+    @Binding var focus: ARFocus?
+    @Binding var ready: Bool
     var onSelect: (GraphLayout.Key) -> Void
     var onRead: (Read) -> Void
 
@@ -110,6 +129,9 @@ struct ARNetworkView: UIViewRepresentable {
         c.onRead = onRead
         c.listen(to: conversation)
         c.reading = reading
+        c.focusBinding = $focus
+        c.readyBinding = $ready
+        c.setFocus(focus)
         c.setRunning(running)
         c.sceneIsEmpty(sceneIsEmpty)  // Clear: the anchors go too
         c.show(response)
@@ -147,6 +169,27 @@ struct ARNetworkView: UIViewRepresentable {
         /// The camera at the previous frame, to tell when the phone is moving.
         private var lastCamera: (transform: simd_float4x4, time: TimeInterval)?
         private var drawn = ""  // signature of what is on screen
+
+        /// The branch picked out by tapping a line, and the SwiftUI state it mirrors.
+        private var focus: ARFocus?
+        var focusBinding: Binding<ARFocus?> = .constant(nil)
+        var readyBinding: Binding<Bool> = .constant(true)
+        /// Whether the camera is showing, mirrored into `readyBinding` only when it changes.
+        private var ready = false {
+            didSet {
+                guard ready != oldValue else { return }
+                let ready = ready, binding = readyBinding
+                DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.25)) { binding.wrappedValue = ready } }
+            }
+        }
+        /// The lines on screen as last drawn, for taps: which branch each belongs to.
+        private var tapLines: [(focus: ARFocus, from: SIMD3<Float>, to: SIMD3<Float>)] = []
+
+        func setFocus(_ new: ARFocus?) {
+            guard new != focus else { return }
+            focus = new
+            render(animated: true)
+        }
         /// Moves glide over about one tracking interval, so 10 updates a second look continuous.
         private let glide: TimeInterval = 0.1
 
@@ -162,16 +205,51 @@ struct ARNetworkView: UIViewRepresentable {
             guard run != running, let view else { return }
             running = run
             if run {
-                let config = ARWorldTrackingConfiguration()
-                config.planeDetection = [.horizontal, .vertical]  // better hits on walls and signs
-                view.session.run(config)
+                startSession()
                 UIDevice.current.beginGeneratingDeviceOrientationNotifications()
                 UprightLabel.follow(view.pointOfView)
                 if links.parent == nil { view.scene.rootNode.addChildNode(links) }
             } else {
+                watchdog?.invalidate(); watchdog = nil
                 view.session.pause()
+                ready = false
                 UIDevice.current.endGeneratingDeviceOrientationNotifications()
             }
+        }
+
+        /// When the last camera frame arrived; the watchdog restarts a session that gets none.
+        private var lastFrame = Date.distantPast
+        private var started = Date.distantPast
+        private var watchdog: Timer?
+
+        private func startSession() {
+            guard let view else { return }
+            let config = ARWorldTrackingConfiguration()
+            config.planeDetection = [.horizontal, .vertical]  // better hits on walls and signs
+            view.session.run(config)
+            ready = false
+            started = Date()
+            // Coming from Camera, its capture session lets go of the camera only after this
+            // session has started, and then ARKit shows black until it is run again.
+            watchdog?.invalidate()
+            watchdog = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.running else { return }
+                    let now = Date()
+                    if now.timeIntervalSince(self.lastFrame) > 1.0,
+                       now.timeIntervalSince(self.started) > 1.0 {
+                        self.startSession()
+                    }
+                }
+            }
+        }
+
+        nonisolated func sessionInterruptionEnded(_ session: ARSession) {
+            MainActor.assumeIsolated { if running { startSession() } }
+        }
+
+        nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
+            MainActor.assumeIsolated { if running { startSession() } }
         }
 
         private var hadWords = false
@@ -186,6 +264,8 @@ struct ARNetworkView: UIViewRepresentable {
         nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
             // delegate calls arrive on the main queue (no delegateQueue set)
             MainActor.assumeIsolated {
+                lastFrame = Date()
+                ready = true
                 // who is talking is watched even while the phone moves: faces don't blur like text
                 if let conversation, conversation.listening {
                     conversation.locator.consider(frame, session: session)
@@ -360,7 +440,20 @@ struct ARNetworkView: UIViewRepresentable {
                 placed.merge(conversation.anchors(camera: camera, scene: scene)) { read, _ in read }
             }
             let layout = response.map { ARNetworkLayout(response: $0, anchors: placed) }
-            let signature = (layout?.signature ?? "")
+
+            // a picked branch: only it is shown; one whose words left the scene lets go
+            var branch: ARBranchLayout?
+            if case .root(let meet) = focus, let response, let layout {
+                branch = ARBranchLayout(meet: meet, response: response, layout: layout)
+            }
+            let focusArc = layout?.arcs.first { focus == .meaning($0.id) }
+            if focus != nil, branch == nil, focusArc == nil {
+                focus = nil
+                DispatchQueue.main.async { [weak self] in self?.focusBinding.wrappedValue = nil }
+            }
+            let shownWords: Set<Int>? = branch.map { Set($0.words) } ?? focusArc.map { [$0.a, $0.b] }
+
+            let signature = "focus:\(String(describing: focus))|" + (layout?.signature ?? "")
                 + (response?.words.map { "\($0.text)|\($0.lang ?? "")|\($0.terms.first ?? 0)" }
                     .joined(separator: ";") ?? "")
                 + personas.map { "\($0.id)|\($0.title)|\($0.lang ?? "")|\($0.words.count)|"
@@ -400,6 +493,7 @@ struct ARNetworkView: UIViewRepresentable {
                 let node = wordObjects[word.key]!.node
                 node.simdPosition = word.position
                 node.simdScale = SIMD3(repeating: word.scale)
+                node.opacity = shownWords.map { $0.contains(word.index) } ?? true ? 1 : 0
             }
             for (key, object) in wordObjects where !keepWords.contains(key) {
                 object.node.removeFromParentNode()
@@ -444,8 +538,10 @@ struct ARNetworkView: UIViewRepresentable {
                     rootObjects[r.node] = (signature, node)
                 }
                 let node = rootObjects[r.node]!.node
-                node.simdPosition = r.position
+                // a picked root rises to make room for the ancestors on the way up to it
+                node.simdPosition = branch?.meet == r.node ? branch!.rootPosition : r.position
                 node.simdScale = SIMD3(repeating: r.scale)
+                node.opacity = focus == nil || focus == .root(r.node) ? 1 : 0
             }
             for (id, object) in rootObjects where !keepRoots.contains(id) {
                 object.node.removeFromParentNode()
@@ -453,24 +549,54 @@ struct ARNetworkView: UIViewRepresentable {
             }
 
             var keepLinks = Set<String>()
-            func link(_ id: String, make: () -> SCNNode) -> SCNNode {
+            /// A link by id: made if new and placed straight away (no glide in from the
+            /// origin), moved in place (gliding) if it was already there.
+            func link(_ id: String, make: () -> SCNNode, update: (SCNNode) -> Void) {
                 keepLinks.insert(id)
-                if let node = linkObjects[id] { return node }
+                if let node = linkObjects[id] {
+                    update(node)
+                    return
+                }
                 let node = make()
+                SCNTransaction.begin()
+                SCNTransaction.disableActions = true
+                update(node)
+                SCNTransaction.commit()
                 links.addChildNode(node)
                 linkObjects[id] = node
-                return node
             }
-            let gold = UIColor(red: 1, green: 0.85, blue: 0.3, alpha: 1)
-            for r in layout?.roots ?? [] {
+            tapLines = []
+
+            if let branch {
+                // the picked root's branch: every ancestor on the way, coloured by how
+                // each step was taken (inherited, borrowed…)
+                for seg in branch.segments {
+                    link("b:\(seg.id):\(seg.kind ?? "")", make: { Self.tube(color: Self.color(kind: seg.kind)) }) {
+                        Self.stretch($0, from: seg.from, to: seg.to, radius: 0.0025 * seg.scale)
+                    }
+                    tapLines.append((.root(branch.meet), seg.from, seg.to))
+                }
+                for card in branch.cards {
+                    guard let n = response?.node(card.node) else { continue }
+                    link("c:\(card.node)", make: { Self.ancestorNode(n) }) {
+                        $0.simdPosition = card.position
+                        $0.simdScale = SIMD3(repeating: card.scale)
+                    }
+                }
+            }
+
+            let gold = Self.color(kind: nil)
+            for r in layout?.roots ?? [] where focus == nil {
                 let bottom = r.position - SIMD3(0, 0.035 * r.scale, 0)  // under the card
                 for i in r.words {
                     guard let w = layout?.words[i] else { continue }
-                    let tube = link("t:\(r.node):\(w.key)") { Self.tube(color: gold) }
-                    Self.stretch(tube, from: w.position, to: bottom, radius: 0.0025 * r.scale)
+                    link("t:\(r.node):\(w.key)", make: { Self.tube(color: gold) }) {
+                        Self.stretch($0, from: w.position, to: bottom, radius: 0.0025 * r.scale)
+                    }
+                    tapLines.append((.root(r.node), w.position, bottom))
                 }
             }
-            for arc in layout?.arcs ?? [] {
+            for arc in layout?.arcs ?? [] where focus == nil || focus == .meaning(arc.id) {
                 guard let a = layout?.words[arc.a], let b = layout?.words[arc.b] else { continue }
                 let id = "\(a.key)=\(b.key)"
                 let scale = (a.scale + b.scale) / 2
@@ -483,18 +609,21 @@ struct ARNetworkView: UIViewRepresentable {
                     let t = Float(k) / 16
                     return (1 - t) * (1 - t) * from + 2 * (1 - t) * t * control + t * t * to
                 }
-                for k in stride(from: 0, to: 16, by: 2) {  // every other segment: dashed
-                    let dash = link("a:\(id):\(k)") { Self.tube(color: .systemGreen) }
-                    Self.stretch(dash, from: points[k], to: points[k + 1], radius: 0.002 * scale)
+                for k in 0..<16 {
+                    tapLines.append((.meaning(arc.id), points[k], points[k + 1]))
+                    guard k.isMultiple(of: 2) else { continue }  // every other segment: dashed
+                    link("a:\(id):\(k)", make: { Self.tube(color: .systemGreen) }) {
+                        Self.stretch($0, from: points[k], to: points[k + 1], radius: 0.002 * scale)
+                    }
                 }
-                let label = link("l:\(id):\(arc.meaning)") {
+                link("l:\(id):\(arc.meaning)", make: {
                     let node = SCNNode(geometry: Self.meaningPlane(arc.meaning))
                     node.constraints = [UprightLabel.constraint()]
-                    node.simdPosition = (from + to) / 2 + dip / 2
                     return node
+                }) {
+                    $0.simdPosition = (from + to) / 2 + dip / 2 + SIMD3(0, -0.02 * scale, 0)
+                    $0.simdScale = SIMD3(repeating: scale)
                 }
-                label.simdPosition = (from + to) / 2 + dip / 2 + SIMD3(0, -0.02 * scale, 0)
-                label.simdScale = SIMD3(repeating: scale)
             }
             for (id, node) in linkObjects where !keepLinks.contains(id) {
                 node.removeFromParentNode()
@@ -559,6 +688,28 @@ struct ARNetworkView: UIViewRepresentable {
             code == "sh" ? "Serbo-Croatian" : Locale.current.localizedString(forLanguageCode: code) ?? code
         }
 
+        /// The colour of a step in a word's history, as in Explore: borrowings orange,
+        /// links to a bare root grey, inheritance gold.
+        static func color(kind: String?) -> UIColor {
+            switch kind {
+            case "borrowed", "learned", "calque", "semantic_loan": return .systemOrange
+            case "root": return .systemGray
+            default: return UIColor(red: 1, green: 0.85, blue: 0.3, alpha: 1)
+            }
+        }
+
+        /// An ancestor on the way up a picked branch: a smaller, paler card than the root's.
+        private static func ancestorNode(_ n: Node) -> SCNNode {
+            let node = SCNNode()
+            node.name = "r:\(n.id)"  // tapped: its details, like any term
+            let card = SCNNode(geometry: SceneLabel.plane(
+                word: n.word, language: n.language, reconstructed: n.reconstructed,
+                fill: UIColor(red: 1.0, green: 0.96, blue: 0.82, alpha: 1), pointsPerUnit: 1800))
+            card.constraints = [UprightLabel.constraint()]
+            node.addChildNode(card)
+            return node
+        }
+
         private static func rootNode(_ n: Node, meaning: String?) -> SCNNode {
             let node = SCNNode()
             node.name = "r:\(n.id)"
@@ -610,25 +761,58 @@ struct ARNetworkView: UIViewRepresentable {
 
         // MARK: taps
 
+        /// A card (word, root, ancestor) opens its details. Otherwise the nearest line picks
+        /// out its branch; a tap on nothing, with a branch picked out, shows everything again.
         @objc func tap(_ gesture: UITapGestureRecognizer) {
             guard let view, let response else { return }
-            for hit in view.hitTest(gesture.location(in: view), options: nil) {
+            let point = gesture.location(in: view)
+            for hit in view.hitTest(point, options: nil) {
                 var n: SCNNode? = hit.node
+                var shown = true
+                var target: GraphLayout.Key?
                 while let current = n {
-                    if let name = current.name {
+                    if current.opacity < 0.05 { shown = false }  // faded out with its branch
+                    if target == nil, let name = current.name {
                         if name.hasPrefix("w:"),
                            let i = response.words.firstIndex(where: { $0.key == name.dropFirst(2) }) {
-                            onSelect(.word(i))
-                            return
-                        }
-                        if name.hasPrefix("r:"), let id = Int(name.dropFirst(2)) {
-                            onSelect(.term(id))
-                            return
+                            target = .word(i)
+                        } else if name.hasPrefix("r:"), let id = Int(name.dropFirst(2)) {
+                            target = .term(id)
                         }
                     }
                     n = current.parent
                 }
+                if shown, let target {
+                    onSelect(target)
+                    return
+                }
             }
+
+            if let picked = nearestLine(to: point, in: view) {
+                guard picked != focus else { return }
+                UISelectionFeedbackGenerator().selectionChanged()
+                focusBinding.wrappedValue = picked
+                setFocus(picked)
+            } else if focus != nil {
+                focusBinding.wrappedValue = nil
+                setFocus(nil)
+            }
+        }
+
+        /// The branch of the line drawn nearest a tap, within a fingertip.
+        private func nearestLine(to point: CGPoint, in view: ARSCNView) -> ARFocus? {
+            func screen(_ p: SIMD3<Float>) -> CGPoint? {
+                let s = view.projectPoint(SCNVector3(p))
+                guard s.z > 0, s.z < 1 else { return nil }  // behind the camera
+                return CGPoint(x: CGFloat(s.x), y: CGFloat(s.y))
+            }
+            var best: (focus: ARFocus, distance: CGFloat)?
+            for line in tapLines {
+                guard let a = screen(line.from), let b = screen(line.to) else { continue }
+                let d = ARGeometry.distance(from: point, toSegment: a, b)
+                if d < (best?.distance ?? 30) { best = (line.focus, d) }
+            }
+            return best?.focus
         }
     }
 }
@@ -683,5 +867,27 @@ private struct ConversationOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
+    }
+}
+
+/// Shown while ARKit starts the camera, instead of a black screen.
+private struct ARStarting: View {
+    var body: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 14) {
+                Image(systemName: "arkit")
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(.white)
+                    .symbolEffect(.pulse, options: .repeating)
+                ProgressView().tint(.white)
+                Text("Starting AR…")
+                    .font(.headline).foregroundStyle(.white)
+                Text("Point the camera at some text.")
+                    .font(.subheadline).foregroundStyle(.white.opacity(0.7))
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityIdentifier("arStarting")
     }
 }

@@ -5,8 +5,13 @@ struct ContentView: View {
     enum Source: String, CaseIterable, Identifiable {
         case camera = "Camera", ar = "AR", photo = "Photo", type = "Type"
         var id: String { rawValue }
-        /// AR needs world tracking (not in the simulator).
-        static var available: [Source] { allCases.filter { $0 != .ar || ARInput.isAvailable } }
+        /// One live mode: AR where the phone has world tracking; Camera (the network drawn
+        /// flat over the video) only as the fallback where it hasn't.
+        static var available: [Source] {
+            allCases.filter { $0 == .ar ? ARInput.isAvailable
+                            : $0 == .camera ? !ARInput.isAvailable && CameraScanner.isAvailable
+                            : true }
+        }
         /// Modes with their own Explore button over the live view.
         var isLive: Bool { self == .camera || self == .ar }
         /// Modes without a picture show the network as a graph under the input.
@@ -27,8 +32,8 @@ struct ContentView: View {
     }
 
     @State private var model = SceneModel()
-    @State private var source: Source = LaunchOptions.source
-        ?? (CameraScanner.isAvailable ? .camera : .type)
+    @State private var source: Source = LaunchOptions.source.flatMap { Source.available.contains($0) ? $0 : nil }
+        ?? (Source.available.first { $0.isLive } ?? .type)
     @State private var selection: Selection?
     @State private var showSettings = false
     @State private var showHelp = false
@@ -348,7 +353,7 @@ private struct PhotoInput: View {
     }
 }
 
-/// Launch arguments for demos and UI tests: `-source photo|type|camera`, `-photo <path>`,
+/// Launch arguments for demos and UI tests: `-source ar|photo|type|camera`, `-photo <path>`,
 /// `-demo` (connect the sample typed text).
 enum LaunchOptions {
     static func value(after flag: String) -> String? {
@@ -357,7 +362,8 @@ enum LaunchOptions {
         return args[i + 1]
     }
     static var source: ContentView.Source? {
-        value(after: "-source").flatMap { ContentView.Source(rawValue: $0.capitalized) }
+        guard let name = value(after: "-source")?.lowercased() else { return nil }
+        return ContentView.Source.allCases.first { $0.rawValue.lowercased() == name }
     }
     static var photoPath: String? { value(after: "-photo") }
 }

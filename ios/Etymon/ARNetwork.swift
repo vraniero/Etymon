@@ -228,3 +228,115 @@ struct ARNetworkLayout {
         }
     }
 }
+
+/// One branch of the network picked out in AR: a shared root (with everything between it
+/// and its words) or a same-meaning pair. Everything else is hidden until it is let go.
+enum ARFocus: Equatable, Hashable {
+    case root(Int)  // the meeting node's id
+    case meaning(String)  // ARNetworkLayout.Arc id
+}
+
+/// A shared root's branch laid out in the room for exploring: each word's full path up to
+/// the root, every ancestor in between on its own card along the way, and the root's own
+/// older ancestry stacked above it. Ancestors two words share are drawn once, so the
+/// paths merge where the words' histories meet.
+struct ARBranchLayout {
+    struct Card {
+        let node: Int
+        let position: SIMD3<Float>
+        let scale: Float
+    }
+
+    struct Segment: Hashable {
+        let id: String
+        let from: SIMD3<Float>
+        let to: SIMD3<Float>
+        let kind: String?  // the edge: inherited, borrowed…
+        let scale: Float
+    }
+
+    let meet: Int
+    let words: [Int]
+    /// The root, raised so the longest path has room for its cards.
+    let rootPosition: SIMD3<Float>
+    let scale: Float
+    private(set) var cards: [Card] = []
+    private(set) var segments: [Segment] = []
+
+    /// Room between two cards along a path, and between ancestors above the root, at 1 m.
+    static let step: Float = 0.08
+    /// Half a card's height at 1 m: lines end at the card's edge, not its middle.
+    static let cardHalf: Float = 0.035
+
+    init?(meet: Int, response: SceneResponse, layout: ARNetworkLayout) {
+        guard let root = layout.roots.first(where: { $0.node == meet }) else { return nil }
+        self.meet = meet
+        let s = root.scale
+        scale = s
+        let up = SIMD3<Float>(0, 1, 0)
+
+        var paths: [(word: Int, steps: [Step])] = []
+        for i in root.words {
+            guard let c = response.connections.first(where: { $0.meet == meet && ($0.a == i || $0.b == i) })
+            else { continue }
+            paths.append((i, c.a == i ? c.pathA : c.pathB))
+        }
+        words = paths.map(\.word)
+        let longest = paths.map { max($0.steps.count - 2, 0) }.max() ?? 0
+        let top = root.position + up * (Self.step * s * Float(longest))
+        rootPosition = top
+
+        var placed: [Int: SIMD3<Float>] = [meet: top]
+        var seen = Set<String>()
+        func link(_ id: String, _ from: SIMD3<Float>, _ to: SIMD3<Float>, _ kind: String?) {
+            guard seen.insert(id).inserted else { return }
+            segments.append(Segment(id: id, from: from, to: to, kind: kind, scale: s))
+        }
+        for (i, steps) in paths {
+            guard let word = layout.words[i] else { continue }
+            // steps run from the word's own term up to the root; in between, the ancestors
+            let between = Array(steps.dropFirst().dropLast())
+            var previous = (key: "w\(i)", position: word.position, isCard: false)
+            for (k, step) in between.enumerated() where step.node != meet {
+                let position: SIMD3<Float>
+                if let p = placed[step.node] {
+                    position = p
+                } else {
+                    let t = Float(k + 1) / Float(between.count + 1)
+                    position = word.position + (top - word.position) * t
+                    placed[step.node] = position
+                    cards.append(Card(node: step.node, position: position, scale: s))
+                }
+                link("\(previous.key)>\(step.node)",
+                     previous.position + (previous.isCard ? up * Self.cardHalf * s : .zero),
+                     position - up * Self.cardHalf * s, step.kind)
+                previous = ("\(step.node)", position, true)
+            }
+            link("\(previous.key)>\(meet)",
+                 previous.position + (previous.isCard ? up * Self.cardHalf * s : .zero),
+                 top - up * Self.cardHalf * s, steps.count > 1 ? steps.last?.kind : nil)
+        }
+
+        // the root's own ancestry, older and higher
+        var below = (key: "\(meet)", position: top)
+        let deeper = response.connections.first { $0.meet == meet }?.deeper ?? []
+        for step in deeper where placed[step.node] == nil {
+            let position = below.position + up * (Self.step * 1.25 * s)
+            placed[step.node] = position
+            cards.append(Card(node: step.node, position: position, scale: s))
+            link("\(below.key)>\(step.node)", below.position + up * Self.cardHalf * s,
+                 position - up * Self.cardHalf * s, step.kind)
+            below = ("\(step.node)", position)
+        }
+    }
+}
+
+extension ARGeometry {
+    /// Distance on screen from a tap to a line between two projected points.
+    static func distance(from p: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let length2 = dx * dx + dy * dy
+        let t = length2 == 0 ? 0 : min(max(((p.x - a.x) * dx + (p.y - a.y) * dy) / length2, 0), 1)
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+}

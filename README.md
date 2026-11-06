@@ -19,10 +19,13 @@ French *père*.
   the face whose mouth moves, a TV or speaker in view, or off camera, and the words it says
   join the network in its colour (`ios/Etymon/Conversation.swift`, `SpeakerLocator.swift`).
   Thresholds still to tune on real conversations
-- [ ] Field testing on a device; offline cache of common words
+- [ ] Field testing on a device (in progress on an iPhone)
 - [x] **AR mode** — words anchored where they are in the room, shared roots floating
   above them (`ios/Etymon/ARInput.swift`); needs a device with world tracking
-- [ ] Saved sessions / personal map of collected words
+- [x] **Saved network** — scenes saved on the phone with their network, picture, object,
+  place and time; a list and map of them; all of them explorable together in 3D, offline
+  (`ios/Etymon/SavedScene.swift`, `LibraryViews.swift`, `OfflineCache.swift`)
+- [x] **Large scenes** — up to 200 words per scene in the app (500 accepted by the backend)
 
 ## Getting started
 
@@ -160,7 +163,7 @@ Launch arguments (Xcode: Product → Scheme → Edit Scheme → Run → Argument
 | argument | does |
 |---|---|
 | `-demo` | connects the sample typed words at launch |
-| `-source camera\|photo\|type` | opens in that mode |
+| `-source ar\|photo\|type` | opens in that mode (`camera` where AR isn't available) |
 | `-photo <path>` | reads an image file as if it had been picked (with `-source photo`) |
 | `-api <url>` | backend address, remembered for later launches (e.g. the Mac's address on a phone) |
 
@@ -210,7 +213,7 @@ everyday run.
      xcrun devicectl device install app --device <identifier> \
        build-device/Build/Products/Release-iphoneos/Etymon.app
      xcrun devicectl device process launch --device <identifier> --terminate-existing \
-       com.ranierovirgilio.etymon -api http://<Mac address>:8000 -source camera
+       com.ranierovirgilio.etymon -api http://<Mac address>:8000 -source ar
      ```
    Release is optimized: large networks (a hundred words and more) move smoothly in
    Explore, which an unoptimized Debug build can't manage.
@@ -233,7 +236,9 @@ With the backend running, from the repository root:
 ```
 
 The UI tests drive the app in the simulator like a user (photo → overlay → detail sheets
-→ graph). To keep their screenshots, add `TEST_RUNNER_ETYMON_SHOTS=/some/folder` in front
+→ graph; typed words and layers; Explore in 3D; saving a scene and opening it, its
+lineages and Explore all with the server gone). They start the app on
+`http://localhost:8000` and with an empty, in-memory store of saved scenes. To keep their screenshots, add `TEST_RUNNER_ETYMON_SHOTS=/some/folder` in front
 of the `xcodebuild` command.
 
 ### Stopping and troubleshooting
@@ -275,14 +280,16 @@ The same guide is in the app: tap **?** in the toolbar.
 
 **Modes** (the switch at the top):
 
-- **Camera** — point the phone at text. The network is drawn over the live video,
-  anchored to the words, and follows them as you move.
-- **AR** — point the phone at text and the words are pinned where they are in the room;
+- **AR** (the default) — point the phone at text and the words are pinned where they are in the room;
   each shared root floats above the words it joins, linked to them, and same-meaning
   pairs are joined by green dashed arcs. Walk around: the network stays put, and words
   read on different walls and signs connect across the space. Tap a word or a root for
-  its details. Hold/Collect and Explore work as in Camera. Shown only on iPhones with
-  world tracking (not in the simulator).
+  its details. Tap a line to see only that branch: a shared root with every ancestor on
+  the way up from each word (coloured by how each step was taken: gold inherited, orange
+  borrowed) and its older ancestry above it, or a same-meaning pair; **Show all** or a tap
+  on empty space brings the whole network back. **Hold/Collect** and **Explore** are at the bottom right.
+- **Camera** — only on devices without world tracking, in place of AR: the network is
+  drawn flat over the live video, anchored to the words, and follows them as you move.
 - **Photo** — pick a picture with text; the network is drawn over it.
 - **Type** — type or paste words and press **Connect**; the network is shown as a graph.
 
@@ -376,11 +383,10 @@ explored later, without the server:
   deeper line above it to the oldest known root.
 - **Tap a word** — that word's own lineage.
 - **Gear** (top right) — Settings: **Maximum words** a scene can discover at once
-  (5–200, default 20, in steps of 5 up to 50 and of 10 above; lowering it drops the oldest words now), My network (remember
-  where scenes are saved, offline lookups kept and clearing them, delete all saved
-  scenes), search depth, and the
-  backend address (simulator: `http://localhost:8000`; phone:
-  `http://<Mac address>:8000`).
+  (5–200, default 20, in steps of 5 up to 50 and of 10 above; lowering it drops the
+  oldest words now), My network (remember where scenes are saved, offline lookups kept
+  and clearing them, delete all saved scenes), search depth, and the backend address
+  (simulator: `http://localhost:8000`; phone: `http://<Mac address>:8000`).
 - **?** — this guide.
 
 The status line at the bottom counts the words, shared roots and same-meaning links, and
@@ -404,7 +410,10 @@ same-meaning `semantic` links), optionally with the scene's likely language:
 returns each word's resolved terms, and for every pair that shares ancestry the nearest
 meeting point (*pater*), both paths to it, and the `deeper` chain above it
 (*\*patēr* → *\*ph₂tḗr* → root *\*peh₂-*), plus a `nodes` table for labels.
-`GET /word?text=padri&lang=it` gives one word's lineage. `ETYMON_DB` points at the database
+Up to 500 words per scene (`MAX_WORDS`): about half a second for 500, a few hundred
+milliseconds for 200. `GET /word?text=padri&lang=it` gives one word's lineage;
+`GET /neighbors?id=<node>` a node's parents and children (Explore's Expand). The app keeps
+the answers of these two lookups on the phone, for offline use. `ETYMON_DB` points at the database
 (default `pipeline/data/etymon.sqlite`).
 
 ### Backend monitor
@@ -449,7 +458,7 @@ What to look for:
 - **Is the language right?** The scene's language decides how ambiguous words are read
   (*farmacia* as Italian, not Spanish).
 - **Is it fast enough?** Scenes normally take tens of milliseconds; much more means the
-  database is on slow storage or the scene is unusually large (up to the Maximum words setting, at most 50).
+  database is on slow storage or the scene is unusually large (up to the Maximum words setting, at most 200: a few hundred milliseconds).
 
 Options:
 
@@ -524,7 +533,7 @@ Steps: see [Getting started](#getting-started). The scripts:
 | `geo.py` | places each language on the map (`language_geo` table): Glottolog points, hand-placed proto-language homelands; rerun after `build_graph.py` |
 | `query.py it padri` | explore one word |
 | `connect.py it padre en paternalistic` | what two words have in common |
-| `export_mobile.py` | a pruned, app-sized copy of the graph (for a future offline mode) |
+| `export_mobile.py` | a pruned, app-sized copy of the graph, for a possible full dictionary on the phone (today offline use relies on saved scenes and cached lookups) |
 
 The historical and reconstructed languages matter: their entries list descendants
 across branches, which is what surfaces shared roots (PIE *\*ph₂tḗr* → Latin *pater*,

@@ -16,14 +16,13 @@ struct HelpView: View {
                 }
 
                 Section("Modes") {
-                    HelpRow(symbol: "camera", title: "Camera",
-                            text: "Point the phone at text. The network is drawn over the live video, "
-                                + "anchored to the words, and follows them as you move.")
                     HelpRow(symbol: "arkit", title: "AR",
                             text: "Point the phone at text: the words are pinned where they are in the "
                                 + "room, their shared roots float above them. Walk around and the network "
                                 + "stays put; words on different signs connect across the space. "
-                                + "Tap a word or a root for its details.")
+                                + "Tap a word or a root for its details. Tap a line to see only that branch, "
+                                + "with every ancestor on the way up; Show all (or a tap on empty space) brings "
+                                + "the whole network back.")
                     HelpRow(symbol: "photo", title: "Photo",
                             text: "Pick a picture with text; the network is drawn over it.")
                     HelpRow(symbol: "mic.fill", title: "Conversation (in AR)",

@@ -30,22 +30,51 @@ def is_affix(word):
     return word.startswith("-") or word.endswith("-")
 
 
+_open_cache = {}
+
+
+def open_affixes(db):
+    """Affixes the search may pass through: combining forms of real words (Italian bio-,
+    from Greek βίος), listed by refine.py. Empty for a database built before it."""
+    path = db.execute("PRAGMA database_list").fetchone()[2]
+    if path and path in _open_cache:
+        return _open_cache[path]
+    try:
+        ids = {i for (i,) in db.execute("SELECT id FROM open_affix")}
+    except sqlite3.OperationalError:
+        ids = set()
+    if path:
+        _open_cache[path] = ids
+    return ids
+
+
+def closed(db, node, word):
+    """A node the search doesn't climb into: an affix shared by too much to mean anything."""
+    return is_affix(word) and node not in open_affixes(db)
+
+
 def climb(db, starts, max_cost=MAX_COST):
     """Dijkstra up the source edges from the start ids, no further than max_cost (the
     search depth). Returns {id: (cost, parent, kind)}."""
     best = {s: (0.0, None, None) for s in starts}
     heap = [(0.0, s) for s in starts]
-    top = set()  # Proto-Indo-European nodes: reached, but not climbed further
+    top = set()  # Proto-Indo-European nodes: climbed only to what they are built from
     kinds = tuple(COST)
     while heap:
         cost, t = heapq.heappop(heap)
-        if cost > best[t][0] or t in top:
+        if cost > best[t][0]:
             continue
         for dst, kind, inferred, word, lang in db.execute(
                 f"SELECT e.dst, e.kind, e.inferred, d.word, d.lang FROM edge e "
                 f"JOIN term d ON d.id=e.dst "
                 f"WHERE e.src=? AND e.kind IN ({','.join('?' * len(kinds))})", (t, *kinds)):
-            if is_affix(word):
+            if closed(db, dst, word):
+                continue
+            if t in top and kind != "component":
+                # PIE is as far back as the data goes; its entries cite other roots as
+                # loosely related (*upo ... *wert- ... *(s)penh₁-), which is not descent.
+                # What a PIE word is built from is stated, though: *septm̥mós (seventh)
+                # = *septḿ̥ (seven) + *-ós
                 continue
             c = cost + COST[kind] + INFERRED_PENALTY * inferred
             if c > max_cost:
@@ -54,8 +83,6 @@ def climb(db, starts, max_cost=MAX_COST):
                 best[dst] = (c, t, kind)
                 heapq.heappush(heap, (c, dst))
             if lang in TOP_LANGUAGES:
-                # PIE is as far back as the data goes; its entries cite other roots as
-                # loosely related (*upo ... *wert- ... *(s)penh₁-), which is not descent
                 top.add(dst)
     return best
 
@@ -83,7 +110,7 @@ def lineage(db, node, depth=12):
             f"WHERE e.src=? AND e.kind IN ({','.join('?' * len(LINEAGE_ORDER))}) "
             f"ORDER BY e.inferred, instr('{' '.join(LINEAGE_ORDER)}', e.kind)",
             (node, *LINEAGE_ORDER)).fetchall()
-        row = next((r for r in row if r[0] not in seen and not is_affix(r[2])), None)
+        row = next((r for r in row if r[0] not in seen and not closed(db, r[0], r[2])), None)
         if row is None:
             break
         node = row[0]

@@ -34,7 +34,17 @@ enum SearchDepth {
 enum WordLimit {
     static let storageKey = "maxWords"
     static let defaultValue = 20
-    static let range = 5...50  // backend accepts up to 50 (backend/app.py MAX_WORDS)
+    static let range = 5...200  // backend accepts up to 500 (backend/app.py MAX_WORDS)
+
+    /// Steps of 5 up to 50, then of 10: fine control where it matters, quick to go high.
+    static func step(at value: Int) -> Int { value < 50 ? 5 : 10 }
+    static func next(after value: Int) -> Int {
+        min((value / step(at: value) + 1) * step(at: value), range.upperBound)
+    }
+    static func previous(before value: Int) -> Int {
+        let step = value <= 50 ? 5 : 10
+        return max(((value - 1) / step) * step, range.lowerBound)
+    }
 
     static var current: Int {
         let stored = UserDefaults.standard.integer(forKey: storageKey)
@@ -43,7 +53,7 @@ enum WordLimit {
 }
 
 /// How deep the search that produced a scene went.
-struct SearchInfo: Decodable, Hashable {
+struct SearchInfo: Codable, Hashable {
     let maxCost: Double  // the depth asked for
     let reached: Double  // how far the deepest climb actually got (stops early when the data runs out)
     let depth: Double  // what the deepest connection found needs (0 if none)
@@ -54,12 +64,12 @@ struct SearchInfo: Decodable, Hashable {
     }
 }
 
-struct Step: Decodable, Hashable {
+struct Step: Codable, Hashable {
     let node: Int
     let kind: String?  // edge used to reach this node; nil for the starting word
 }
 
-struct Connection: Decodable, Hashable, Identifiable {
+struct Connection: Codable, Hashable, Identifiable {
     let a: Int
     let b: Int
     let meet: Int
@@ -78,7 +88,7 @@ struct Connection: Decodable, Hashable, Identifiable {
     }
 }
 
-struct Node: Decodable, Hashable, Identifiable {
+struct Node: Codable, Hashable, Identifiable {
     let id: Int
     let lang: String
     let language: String
@@ -89,7 +99,7 @@ struct Node: Decodable, Hashable, Identifiable {
     let lon: Double?
 }
 
-struct SceneWord: Decodable, Hashable {
+struct SceneWord: Codable, Hashable {
     let text: String
     let lang: String?
     let terms: [Int]
@@ -99,14 +109,14 @@ struct SceneWord: Decodable, Hashable {
 }
 
 /// Two scene words in different languages with the same meaning (aperta = open).
-struct SemanticLink: Decodable, Hashable, Identifiable {
+struct SemanticLink: Codable, Hashable, Identifiable {
     let a: Int
     let b: Int
     let meaning: String
     var id: String { "\(a)=\(b)" }
 }
 
-struct SceneResponse: Decodable {
+struct SceneResponse: Codable {
     let search: SearchInfo?  // absent from older backends
     let words: [SceneWord]
     let connections: [Connection]  // shared etymological ancestry
@@ -117,8 +127,8 @@ struct SceneResponse: Decodable {
     var semanticLinks: [SemanticLink] { semantic ?? [] }
 }
 
-struct WordResponse: Decodable {
-    struct Entry: Decodable {
+struct WordResponse: Codable {
+    struct Entry: Codable {
         let term: Int
         let lineage: [Step]
     }
@@ -173,7 +183,7 @@ extension SceneResponse {
 }
 
 /// A node's immediate network, from GET /neighbors: where it comes from and what came from it.
-struct NeighborsResponse: Decodable {
+struct NeighborsResponse: Codable {
     let node: Int
     let parents: [Step]
     let children: [Step]

@@ -14,9 +14,14 @@ French *père*.
 - [x] **Backend API** — scene words in, shared roots and same-meaning links out (`backend/`)
 - [x] **iOS MVP** — camera / photo / typed text → text recognition → API → network drawn
   over the picture and live video, plus a graph view (`ios/`)
+- [x] **Conversation** — in AR, the microphone streams to the backend (`backend/listen.py`:
+  Whisper per utterance, speaker embeddings for voices); each voice is a persona placed on
+  the face whose mouth moves, a TV or speaker in view, or off camera, and the words it says
+  join the network in its colour (`ios/Etymon/Conversation.swift`, `SpeakerLocator.swift`).
+  Thresholds still to tune on real conversations
 - [ ] Field testing on a device; offline cache of common words
-- [ ] Speech input
-- [ ] AR mode (words anchored in space, linked to floating roots)
+- [x] **AR mode** — words anchored where they are in the room, shared roots floating
+  above them (`ios/Etymon/ARInput.swift`); needs a device with world tracking
 - [ ] Saved sessions / personal map of collected words
 
 ## Getting started
@@ -78,8 +83,20 @@ Set it up once:
 ```sh
 cd backend
 python3 -m venv .venv
-.venv/bin/pip install fastapi uvicorn httpx pytest
+.venv/bin/pip install fastapi uvicorn httpx pytest websockets
 ```
+
+For **Conversation** (listening in AR) add the speech models — Apple Silicon only; about
+2 GB on first use (Whisper large-v3-turbo, an ECAPA speaker model), downloaded the first
+time the phone starts listening:
+
+```sh
+.venv/bin/pip install mlx-whisper speechbrain soundfile
+```
+
+`websockets` is what lets uvicorn accept the phone's audio stream (`/listen`); without it
+the phone's microphone button reports the server lost. Each utterance appears in the
+monitor with its persona (`P1*` = a new voice) and language.
 
 Then run it in its own terminal window and leave it running (**Ctrl+C** stops it):
 
@@ -189,12 +206,14 @@ everyday run.
      xcodegen generate
      xcrun devicectl list devices            # the phone's identifier
      xcodebuild -project Etymon.xcodeproj -scheme Etymon -destination 'id=<identifier>' \
-       -derivedDataPath build-device -allowProvisioningUpdates build
+       -configuration Release -derivedDataPath build-device -allowProvisioningUpdates build
      xcrun devicectl device install app --device <identifier> \
-       build-device/Build/Products/Debug-iphoneos/Etymon.app
+       build-device/Build/Products/Release-iphoneos/Etymon.app
      xcrun devicectl device process launch --device <identifier> --terminate-existing \
        com.ranierovirgilio.etymon -api http://<Mac address>:8000 -source camera
      ```
+   Release is optimized: large networks (a hundred words and more) move smoothly in
+   Explore, which an unoptimized Debug build can't manage.
 4. Point the camera at text: outlines appear on the words, shared roots float above them,
    same-meaning words are joined by dashed arcs, and the backend terminal prints each
    scene. **Hold** keeps the collected words while still tracking them.
@@ -258,6 +277,12 @@ The same guide is in the app: tap **?** in the toolbar.
 
 - **Camera** — point the phone at text. The network is drawn over the live video,
   anchored to the words, and follows them as you move.
+- **AR** — point the phone at text and the words are pinned where they are in the room;
+  each shared root floats above the words it joins, linked to them, and same-meaning
+  pairs are joined by green dashed arcs. Walk around: the network stays put, and words
+  read on different walls and signs connect across the space. Tap a word or a root for
+  its details. Hold/Collect and Explore work as in Camera. Shown only on iPhones with
+  world tracking (not in the simulator).
 - **Photo** — pick a picture with text; the network is drawn over it.
 - **Type** — type or paste words and press **Connect**; the network is shown as a graph.
 
@@ -276,7 +301,7 @@ switches between two modes; the label is the action it will take:
 
 - **Normal (button reads *Hold*)** — the app keeps collecting. About once a second it
   reads the frame carefully and **adds new words** to the scene, up to the **Maximum
-  words** set in Settings (20 by default, 5–50). When more words are in view than that,
+  words** set in Settings (20 by default, 5–200). When more words are in view than that,
   the scene stays stable: words still in view keep their place, only words that have
   left the frame make room, and new words are taken largest on screen first, then in
   reading order — so the same view always gives the same words, then asks for the network again. Pan across a street and words from
@@ -309,9 +334,37 @@ video and opens the scene's network as a 3D space:
 The backend serves Expand with `GET /neighbors?id=<node>` (parents and up to 16
 children, modern and common words first); the monitor prints an `explore` line for each.
 
+**Your saved network — Save and My network.** Scenes can be kept on the phone and
+explored later, without the server:
+
+- **Save** (bookmark, in the status line once a network is shown) keeps the scene as it is
+  at that moment: its words, the network the backend found for them, and the picture it
+  was read from (the last carefully read video frame, or the photo) with where each word
+  was in it. A sheet asks **what it was on**. It suggests names from the picture (on-device
+  image classification: *sign*, *menu*, *book*…), and you can type your own and add a
+  note. If you allow location, it also stores **where** you were (coordinates and a street and
+  town); the date and time are always stored. **Remember where** turns location off.
+- **My network** (books, top left) lists the saved scenes, newest first, with a search
+  across words, objects, notes and places, and a **Map** of where each was found. Swipe to
+  delete.
+- **Open a scene** to see its picture with the network drawn over it exactly as it was (or the graph, for typed
+  and heard words), switch Roots/Meanings, open the Graph or Explore it in 3D, tap words
+  for their lineage, and rename it or edit its note.
+- **Explore all** joins every saved scene (or those matching the search) into one 3D
+  network. Scenes connect where their networks share a node, where words of different
+  scenes mean the same thing, and through each word's lineage: *padre* saved on one sign
+  and *paternal* in a book meet at Latin *pater*. Each scene word shows **seen on**, with
+  the object, place and date of every scene it was found in.
+- **Offline**: saved scenes are stored on the device (SwiftData) and need no server.
+  The app also keeps every answer to a lookup (`/word` lineages, `/neighbors` for Expand)
+  in Application Support, and uses it when the server can't be reached. The lineage of each word
+  is fetched when a scene is saved, so Lineage and Explore all work offline straight
+  away. Expanding a word that was never expanded before still needs the server.
+
 **Other controls:**
 
 - **Trash** (top left) — clear the scene and start fresh.
+- **Books** (top left) — My network, the saved scenes (see above).
 - **Graph** (bottom right, camera and photo) — the same network as a diagram.
 - **Both · Roots · Meanings** — what the network shows: shared roots (etymological
   connections), same meanings (semantic connections), or both side by side. The switch
@@ -323,7 +376,9 @@ children, modern and common words first); the monitor prints an `explore` line f
   deeper line above it to the oldest known root.
 - **Tap a word** — that word's own lineage.
 - **Gear** (top right) — Settings: **Maximum words** a scene can discover at once
-  (5–50, default 20; lowering it drops the oldest words now), search depth, and the
+  (5–200, default 20, in steps of 5 up to 50 and of 10 above; lowering it drops the oldest words now), My network (remember
+  where scenes are saved, offline lookups kept and clearing them, delete all saved
+  scenes), search depth, and the
   backend address (simulator: `http://localhost:8000`; phone:
   `http://<Mac address>:8000`).
 - **?** — this guide.
@@ -462,7 +517,9 @@ Steps: see [Getting started](#getting-started). The scripts:
 |---|---|
 | `fetch_languages.py` | Wiktionary's language, family and etymology-language tables |
 | `fetch.py <Language>...` | downloads kaikki.org dumps and keeps the fields the graph needs |
-| `build_graph.py` | builds `data/etymon.sqlite` from the slimmed dumps |
+| `build_graph.py` | builds `data/etymon.sqlite` from the slimmed dumps, then runs `refine.py` |
+| `refine.py` | joins what citation habits split: cited spellings of reconstructions onto their entry (*\*septmós* → *\*septm̥mós*), and lists the affixes the search may pass through (`open_affix`: combining forms like *bio-* → *βίος*, not grammatical ones like *-zione*); rerunnable on a built database |
+| `test_refine.py` | checks of these passes on small hand-made graphs (`../backend/.venv/bin/python -m pytest test_refine.py`) |
 | `build_meanings.py` | adds same-meaning links (`meaning` table) |
 | `geo.py` | places each language on the map (`language_geo` table): Glottolog points, hand-placed proto-language homelands; rerun after `build_graph.py` |
 | `query.py it padri` | explore one word |

@@ -3,8 +3,14 @@ import SwiftUI
 
 struct ContentView: View {
     enum Source: String, CaseIterable, Identifiable {
-        case camera = "Camera", photo = "Photo", type = "Type"
+        case camera = "Camera", ar = "AR", photo = "Photo", type = "Type"
         var id: String { rawValue }
+        /// AR needs world tracking (not in the simulator).
+        static var available: [Source] { allCases.filter { $0 != .ar || ARInput.isAvailable } }
+        /// Modes with their own Explore button over the live view.
+        var isLive: Bool { self == .camera || self == .ar }
+        /// Modes without a picture show the network as a graph under the input.
+        var showsGraphInline: Bool { self == .type }
     }
 
     enum Selection: Identifiable {
@@ -28,6 +34,8 @@ struct ContentView: View {
     @State private var showHelp = false
     @State private var fullPaths = false
     @State private var exploreGraph: ExploreGraph?  // set = Explore is open
+    @State private var draft: SceneDraft?  // set = the save sheet is open
+    @State private var showLibrary = false
     @AppStorage(NetworkLayers.storageKey) private var layers: NetworkLayers = .both
     @AppStorage(SearchDepth.storageKey) private var searchDepth = SearchDepth.defaultValue
     @AppStorage(WordLimit.storageKey) private var maxWords = WordLimit.defaultValue
@@ -36,7 +44,7 @@ struct ContentView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("Source", selection: $source) {
-                    ForEach(Source.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(Source.available) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal).padding(.bottom, 8)
@@ -46,6 +54,10 @@ struct ContentView: View {
                 case .camera:
                     CameraInput(model: model, layers: layers, exploring: exploreGraph != nil,
                                 onSelect: select, onExplore: explore)
+                    status
+                case .ar:
+                    ARInput(model: model, layers: layers, exploring: exploreGraph != nil,
+                            onSelect: select, onExplore: explore)
                     status
                 case .photo:
                     PhotoInput(model: model, layers: layers, onSelect: select)
@@ -65,6 +77,10 @@ struct ContentView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Clear", systemImage: "trash") { model.reset() }
                         .disabled(model.words.isEmpty)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("My network", systemImage: "books.vertical") { showLibrary = true }
+                        .accessibilityIdentifier("library")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Help", systemImage: "questionmark.circle") { showHelp = true }
@@ -99,6 +115,8 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showHelp) { HelpView() }
+            .sheet(item: $draft) { SaveSceneView(draft: $0) }
+            .sheet(isPresented: $showLibrary) { LibraryView() }
             .fullScreenCover(item: $exploreGraph) { graph in
                 ExploreView(graph: graph) { exploreGraph = nil }
             }
@@ -112,8 +130,9 @@ struct ContentView: View {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
             } else if model.words.isEmpty {
-                Text(source == .camera ? "Point at some text." :
-                     source == .photo ? "Pick a photo with some text." : "Type a few words.")
+                Text(source.isLive ? "Point at some text." :
+                     source == .photo ? "Pick a photo with some text." :
+                     "Type a few words.")
             } else {
                 let roots = model.response?.connections.count ?? 0
                 let meanings = model.response?.semanticLinks.count ?? 0
@@ -121,7 +140,7 @@ struct ContentView: View {
                      + (model.language.map { " · \($0)" } ?? ""))
             }
             Spacer()
-            if source != .type, model.response != nil {
+            if !source.showsGraphInline, model.response != nil {
                 Menu {
                     Picker("Show", selection: $layers) {
                         ForEach(NetworkLayers.allCases) { Text($0.title).tag($0) }
@@ -132,18 +151,23 @@ struct ContentView: View {
                 .controlSize(.mini).buttonStyle(.bordered)
                 .accessibilityIdentifier("layersMenu")
             }
-            if source == .type, layers.showsRoots, model.response?.connections.isEmpty == false {
+            if source.showsGraphInline, layers.showsRoots, model.response?.connections.isEmpty == false {
                 Toggle("Full paths", isOn: $fullPaths)
                     .toggleStyle(.button).controlSize(.mini)
                     .accessibilityIdentifier("fullPaths")
-            } else if source != .type, model.response != nil {
+            } else if !source.showsGraphInline, model.response != nil {
                 Button("Graph", systemImage: "point.3.connected.trianglepath.dotted") {
                     selection = .graph
                 }
                 .controlSize(.mini).buttonStyle(.bordered)
                 .accessibilityIdentifier("showGraph")
             }
-            if source != .camera, model.response?.words.isEmpty == false {
+            if model.response?.words.isEmpty == false {
+                Button("Save", systemImage: "bookmark") { save() }
+                    .controlSize(.mini).buttonStyle(.bordered)
+                    .accessibilityIdentifier("saveScene")
+            }
+            if !source.isLive, model.response?.words.isEmpty == false {
                 Button("Explore", systemImage: "cube.transparent") { explore() }
                     .controlSize(.mini).buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("explore")
@@ -179,20 +203,34 @@ struct ContentView: View {
 
     private func select(_ key: GraphLayout.Key) {
         guard let response = model.response else { return }
+        selection = Selection.of(key, in: response)
+    }
+
+    /// Keep the scene as it is now: the save sheet asks what it was on.
+    private func save() {
+        guard let response = model.response, !response.words.isEmpty else { return }
+        draft = SceneDraft(source: source.rawValue, response: response, language: model.language,
+                           picture: source.showsGraphInline ? nil : model.picture)
+    }
+}
+
+extension ContentView.Selection {
+    /// What tapping a word or node of a scene's network opens.
+    static func of(_ key: GraphLayout.Key, in response: SceneResponse) -> Self? {
         switch key {
         case .word(let i):
             // a word that is a meeting point (caffè for coffee) shows the connection
             if let c = response.connections.first(where: { response.words[i].terms.contains($0.meet) }) {
-                selection = .connection(c)
-            } else {
-                selection = .word(text: response.words[i].text, lang: response.words[i].lang)
+                return .connection(c)
             }
+            return .word(text: response.words[i].text, lang: response.words[i].lang)
         case .term(let id):
             if let c = response.connections.first(where: { $0.meet == id }) {
-                selection = .connection(c)
+                return .connection(c)
             } else if let n = response.node(id) {
-                selection = .word(text: n.word, lang: n.lang)
+                return .word(text: n.word, lang: n.lang)
             }
+            return nil
         }
     }
 }
@@ -235,7 +273,8 @@ private struct CameraInput: View {
             }
             .onAppear {
                 scanner.onFrame = { frame in
-                    model.see(frame.recognition, imageSize: frame.imageSize, full: frame.isFull)
+                    model.see(frame.recognition, imageSize: frame.imageSize, full: frame.isFull,
+                              picture: frame.picture)
                 }
                 scanner.start()
             }
@@ -304,7 +343,8 @@ private struct PhotoInput: View {
             (try? WordExtractor.recognize(in: cg, orientation: orientation)) ?? Recognition()
         }.value
         model.reset()
-        model.see(recognition, imageSize: ui.size, full: true, still: true)
+        model.see(recognition, imageSize: ui.size, full: true, still: true,
+                  picture: .image(cg, orientation))
     }
 }
 

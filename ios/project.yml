@@ -27,6 +27,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Etymon
         INFOPLIST_KEY_NSCameraUsageDescription: Etymon reads the words around you to show how they are related.
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Etymon reads the words in a photo to show how they are related.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Etymon listens to the people talking around you, to show how the words they say are related.
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Etymon remembers where you found the words of a scene you save.
     info:
       path: Etymon/Info.plist
       properties:

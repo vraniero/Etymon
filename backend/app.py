@@ -6,6 +6,7 @@
                      (same meaning across languages: aperta = open)
     GET  /word?text=padri&lang=it
     GET  /health
+    WS   /listen  live audio -> utterances by persona (see listen.py)
 
 Run: .venv/bin/uvicorn app:app --reload        (from backend/)
 DB:  ETYMON_DB=/path/to/etymon.sqlite          (default: ../pipeline/data/etymon.sqlite)
@@ -23,11 +24,11 @@ from pydantic import BaseModel, Field
 
 PIPELINE = Path(__file__).resolve().parent.parent / "pipeline"
 sys.path.insert(0, str(PIPELINE))
-from connect import MAX_COST, climb, is_affix, lineage, meetings  # noqa: E402
+from connect import MAX_COST, climb, closed, lineage, meetings  # noqa: E402
 from query import MODERN, resolve  # noqa: E402
 
 DB_PATH = Path(os.environ.get("ETYMON_DB", PIPELINE / "data" / "etymon.sqlite"))
-MAX_WORDS = 50  # per scene; the app's word limit goes up to this
+MAX_WORDS = 500  # per scene; the app's word limit (up to 200) stays well under it
 MAX_SEARCH_DEPTH = 40
 PUNCT = " \t\n.,;:!?¡¿\"'“”‘’«»()[]{}"
 
@@ -325,13 +326,13 @@ def neighbors(id: int, children: int = Query(16, ge=0, le=60),
         f"SELECT e.dst, e.kind, t.word FROM edge e JOIN term t ON t.id=e.dst "
         f"WHERE e.src=? AND e.kind IN ({marks}) ORDER BY e.inferred, "
         f"instr('inherited borrowed learned calque semantic_loan derived component root', e.kind)",
-        (id, *DESCENT)) if not is_affix(w)][:10]
+        (id, *DESCENT)) if not closed(db, d, w)][:10]
     modern = ",".join(f"'{m}'" for m in MODERN)
     kids = [Step(node=s_, kind=k) for s_, k, w in db.execute(
         f"SELECT e.src, e.kind, t.word FROM edge e JOIN term t ON t.id=e.src "
         f"WHERE e.dst=? AND e.kind IN ({marks}) "
         f"ORDER BY (t.lang IN ({modern})) DESC, coalesce(t.zipf, 0) DESC, t.has_entry DESC, e.inferred "
-        f"LIMIT ?", (id, *DESCENT, children * 3)) if not is_affix(w)][:children]
+        f"LIMIT ?", (id, *DESCENT, children * 3)) if not closed(db, s_, w)][:children]
     used = {id} | {p.node for p in parents} | {c.node for c in kids}
     nodes = nodes_for(db, used)
     total = db.execute(f"SELECT count(*) FROM edge WHERE dst=? AND kind IN ({marks})",
@@ -341,3 +342,10 @@ def neighbors(id: int, children: int = Query(16, ge=0, le=60),
              f"{len(parents)} parents · {len(kids)} of {total} children")
     return {"node": id, "parents": parents, "children": kids, "total_children": total,
             "meanings": meanings_for(db, [id]), "nodes": nodes}
+
+
+# Conversation listening (WS /listen): audio in, who said which words out. Models load on
+# the first connection, so the API starts as fast as before.
+from listen import router as listen_router  # noqa: E402
+
+app.include_router(listen_router)

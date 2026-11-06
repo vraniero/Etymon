@@ -216,6 +216,13 @@ struct ExploreView: View {
         if let gloss = node.gloss {
             Text(gloss).font(.subheadline)
         }
+        if let seen = graph.origins[node.id], !seen.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("seen on").font(.caption).foregroundStyle(.secondary)
+                ForEach(seen, id: \.self) { Label($0, systemImage: "mappin.and.ellipse").font(.caption) }
+            }
+            .accessibilityIdentifier("seenOn")
+        }
         VStack(alignment: .leading, spacing: 8) {
             if !links.parents.isEmpty {
                 section("comes from", links.parents.compactMap { e in graph.nodes[e.b].map { ($0, e.kind) } })
@@ -442,31 +449,11 @@ struct NetworkScene: UIViewRepresentable {
             return object
         }
 
-        /// A word and its language, drawn into an image on a plane that faces the camera.
+        /// A word and its language on a plane that faces the camera.
         private static func labelPlane(_ node: ExploreGraph.XNode) -> SCNPlane {
-            let font = UIFont.systemFont(ofSize: 34, weight: .semibold)
-            let small = UIFont.systemFont(ofSize: 20, weight: .regular)
-            let word = node.label as NSString
-            let lang = node.language as NSString
-            let ws = word.size(withAttributes: [.font: font])
-            let ls = lang.size(withAttributes: [.font: small])
-            let size = CGSize(width: max(ws.width, ls.width) + 36, height: ws.height + ls.height + 18)
-            let image = UIGraphicsImageRenderer(size: size).image { _ in
-                let rect = CGRect(origin: .zero, size: size)
-                UIColor(NetworkScene.color(for: node.role)).withAlphaComponent(0.92).setFill()
-                UIBezierPath(roundedRect: rect, cornerRadius: 14).fill()
-                let italic = node.reconstructed
-                    ? UIFont.italicSystemFont(ofSize: 34).withWeight(.semibold) : font
-                word.draw(at: CGPoint(x: (size.width - ws.width) / 2, y: 6),
-                          withAttributes: [.font: italic, .foregroundColor: UIColor.black])
-                lang.draw(at: CGPoint(x: (size.width - ls.width) / 2, y: 6 + ws.height),
-                          withAttributes: [.font: small, .foregroundColor: UIColor.black.withAlphaComponent(0.6)])
-            }
-            let plane = SCNPlane(width: size.width / 170, height: size.height / 170)
-            plane.firstMaterial?.diffuse.contents = image
-            plane.firstMaterial?.lightingModel = .constant
-            plane.firstMaterial?.isDoubleSided = true
-            return plane
+            SceneLabel.plane(word: node.label, language: node.language,
+                             reconstructed: node.reconstructed,
+                             fill: UIColor(NetworkScene.color(for: node.role)), pointsPerUnit: 170)
         }
 
         // MARK: motion
@@ -594,12 +581,5 @@ struct NetworkScene: UIViewRepresentable {
                 settleFrames = 120
             }
         }
-    }
-}
-
-private extension UIFont {
-    func withWeight(_ weight: UIFont.Weight) -> UIFont {
-        let descriptor = fontDescriptor.addingAttributes([.traits: [UIFontDescriptor.TraitKey.weight: weight]])
-        return UIFont(descriptor: descriptor, size: pointSize)
     }
 }

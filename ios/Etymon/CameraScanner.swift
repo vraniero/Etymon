@@ -9,6 +9,7 @@ final class CameraScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         let recognition: Recognition
         let imageSize: CGSize  // upright frame size, for mapping boxes onto the preview
         let isFull: Bool  // careful pass: may add words; otherwise only positions
+        let picture: ScenePicture.Source?  // careful passes: the frame, for saving the scene
     }
 
     let session = AVCaptureSession()
@@ -70,7 +71,9 @@ final class CameraScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         guard let recognition = try? WordExtractor.recognize(in: buffer, orientation: .right,
                                                              fast: !full && trackFast) else { return }
         if full { trackFast = WordExtractor.fastReads(recognition.text) }
-        let frame = Frame(recognition: recognition, imageSize: size, isFull: full)
+        // a copy, so the camera gets its buffer back; once a second, cheap
+        let picture = full ? ARGeometry.copy(buffer).map { ScenePicture.Source.buffer($0, .right) } : nil
+        let frame = Frame(recognition: recognition, imageSize: size, isFull: full, picture: picture)
         DispatchQueue.main.async { [weak self] in self?.onFrame?(frame) }
     }
 }

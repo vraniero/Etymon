@@ -19,8 +19,20 @@ struct HelpView: View {
                     HelpRow(symbol: "camera", title: "Camera",
                             text: "Point the phone at text. The network is drawn over the live video, "
                                 + "anchored to the words, and follows them as you move.")
+                    HelpRow(symbol: "arkit", title: "AR",
+                            text: "Point the phone at text: the words are pinned where they are in the "
+                                + "room, their shared roots float above them. Walk around and the network "
+                                + "stays put; words on different signs connect across the space. "
+                                + "Tap a word or a root for its details.")
                     HelpRow(symbol: "photo", title: "Photo",
                             text: "Pick a picture with text; the network is drawn over it.")
+                    HelpRow(symbol: "mic.fill", title: "Conversation (in AR)",
+                            text: "Tap the microphone in AR. Each voice becomes a persona: found on the "
+                                + "face whose mouth moves as it talks, on a TV or speaker in view, or "
+                                + "placed to one side when it comes from off camera. The words each one "
+                                + "says float above them in their colour, in the language they spoke, "
+                                + "and link to everything else in the scene as they are said. "
+                                + "Needs the Mac backend's listening models (see README).")
                     HelpRow(symbol: "keyboard", title: "Type",
                             text: "Type or paste words and press Connect; the network is shown as a graph.")
                 }
@@ -100,6 +112,28 @@ struct HelpView: View {
                     Text("Blue: seen in the scene · yellow: ancestors (stronger yellow: shared "
                          + "roots) · grey: brought in by Expand. Yellow lines: descent · orange: "
                          + "borrowing · green: same meaning.")
+                }
+
+                Section {
+                    HelpRow(symbol: "bookmark", title: "Save",
+                            text: "Keep the scene you're looking at: its words, the network found for "
+                                + "them, and the picture. Say what it was on — a sign, a menu, a book "
+                                + "(the app suggests a name from the picture) — and, if you allow it, "
+                                + "where you were. The date and time are added.")
+                    HelpRow(symbol: "books.vertical", title: "My network",
+                            text: "Everything you've saved, as a list or on a map. Open a scene to see "
+                                + "its picture with the network over it, as it was, and rename it or "
+                                + "add a note. Search by word, object or place; swipe to delete.")
+                    HelpRow(symbol: "cube.transparent", title: "Explore all",
+                            text: "All your saved scenes as one network in 3D. Scenes join where their "
+                                + "words share an ancestor or a meaning — padre on a church, "
+                                + "paternal in a book — and each word shows where and when you saw it.")
+                    HelpRow(symbol: "wifi.slash", title: "Offline",
+                            text: "Saved scenes are on your phone and need no server. Each word's "
+                                + "lineage is kept when you save, and words you expanded or looked up "
+                                + "before still work. Only new lookups need the server.")
+                } header: {
+                    Text("Your saved network")
                 }
 
                 Section("Other controls") {

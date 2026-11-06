@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// A chain of steps read top to bottom: word, "inherited from", ancestor, ...
@@ -105,7 +106,11 @@ struct SettingsView: View {
                          + "e.g. http://192.168.1.20:8000, and start the server with --host 0.0.0.0.")
                 }
                 Section {
-                    Stepper(value: $maxWords, in: WordLimit.range, step: 5) {
+                    Stepper {
+                        maxWords = WordLimit.next(after: maxWords)
+                    } onDecrement: {
+                        maxWords = WordLimit.previous(before: maxWords)
+                    } label: {
                         LabeledContent("Maximum words", value: "\(maxWords)").monospacedDigit()
                     }
                     .accessibilityIdentifier("maxWords")
@@ -117,8 +122,10 @@ struct SettingsView: View {
                     Text("How many words a scene can discover at once. Words still in view keep "
                          + "their place; new ones (largest first) take the place of words that have "
                          + "left the frame. More words find more connections, but the network gets "
-                         + "busier and slower to update.")
+                         + "busier and slower to update: above about 100, the network and Explore "
+                         + "get crowded.")
                 }
+                SavedSettingsSection()
                 Section {
                     SearchDepthStepper()
                     Button("Reset to \(SearchDepth.defaultValue.formatted())") {
@@ -154,5 +161,42 @@ struct SearchDepthStepper: View {
             }
         }
         .accessibilityIdentifier("searchDepth")
+    }
+}
+
+/// Settings for the saved network: location, and what is kept for offline use.
+private struct SavedSettingsSection: View {
+    @AppStorage(SaveSettings.locationKey) private var rememberPlace = true
+    @Query private var scenes: [SavedScene]
+    @Environment(\.modelContext) private var context
+    @State private var usage = OfflineCache.shared.usage()
+    @State private var confirmDelete = false
+
+    var body: some View {
+        Section {
+            Toggle("Remember where scenes are saved", isOn: $rememberPlace)
+            LabeledContent("Saved scenes", value: "\(scenes.count)")
+            LabeledContent("Offline lookups",
+                           value: "\(usage.count) · \(usage.bytes.formatted(.byteCount(style: .file)))")
+            Button("Clear offline lookups") {
+                OfflineCache.shared.clear()
+                usage = OfflineCache.shared.usage()
+            }
+            .disabled(usage.count == 0)
+            Button("Delete all saved scenes", role: .destructive) { confirmDelete = true }
+                .disabled(scenes.isEmpty)
+                .confirmationDialog("Delete all \(scenes.count) saved scenes?",
+                                    isPresented: $confirmDelete, titleVisibility: .visible) {
+                    Button("Delete all", role: .destructive) {
+                        scenes.forEach(context.delete)
+                        try? context.save()
+                    }
+                }
+        } header: {
+            Text("My network")
+        } footer: {
+            Text("Saved scenes stay on this phone. Lookups (each word's lineage, Expand in "
+                 + "Explore) are kept too, so saved scenes can be explored without the server.")
+        }
     }
 }

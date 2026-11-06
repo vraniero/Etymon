@@ -41,6 +41,8 @@ final class ExploreGraph: Identifiable {
     /// Bumped on every structural change, so views redraw only when the network changes.
     private(set) var version = 0
     private(set) var sceneWords: [Int] = []
+    /// For saved scenes: where each scene word was seen ("sign · Barcelona · 5 Nov 2026").
+    var origins: [Int: [String]] = [:]
 
     init(response: SceneResponse, layers: NetworkLayers = .both) {
         let r = response.showing(layers)
@@ -102,6 +104,43 @@ final class ExploreGraph: Identifiable {
         center.expanded = true
         center.totalChildren = response.totalChildren
         nodes[response.node] = center
+        relevel()
+        version += 1
+    }
+
+    /// Join scene words through their lineages (GET /word, cached on the device): each
+    /// word's chain of ancestors is followed up to the first ancestor it shares with another
+    /// scene word, which becomes a meeting point. This links words of different saved scenes
+    /// (padre in one, paternalistic in another) without asking the server for a new scene.
+    /// Chains are cut at `maxSteps` so links through distant roots stay out.
+    func join(lineages: [Int: [Step]], nodes lineageNodes: [String: Node], maxSteps: Int = 8) {
+        var chains: [Int: [Step]] = [:]
+        for (term, steps) in lineages where nodes[term]?.role == .scene {
+            chains[term] = Array(steps.prefix(maxSteps))
+        }
+        var sharedBy: [Int: Set<Int>] = [:]
+        for (term, chain) in chains {
+            for step in chain where step.node != term { sharedBy[step.node, default: []].insert(term) }
+        }
+        var changed = false
+        for (term, chain) in chains.sorted(by: { $0.key < $1.key }) {
+            // a scene word that is itself an ancestor of another (pater) also meets there
+            guard let k = chain.firstIndex(where: {
+                (sharedBy[$0.node]?.count ?? 0) >= 2 || (nodes[$0.node]?.role == .scene && $0.node != term)
+            }) else { continue }
+            var child = term
+            for step in chain[...k] {
+                if nodes[step.node] == nil, let n = lineageNodes[String(step.node)] {
+                    add(n, role: .ancestor, level: 1)
+                }
+                guard nodes[step.node] != nil else { break }
+                edges.insert(XEdge(a: child, b: step.node, kind: step.kind ?? "derived", meaning: nil))
+                child = step.node
+                changed = true
+            }
+            if nodes[chain[k].node]?.role == .ancestor { nodes[chain[k].node]?.role = .meeting }
+        }
+        guard changed else { return }
         relevel()
         version += 1
     }
@@ -188,51 +227,75 @@ final class ForceLayout {
         }
     }
 
+    /// Beyond this distance nodes no longer push each other apart (the push there is
+    /// ~1% of a spring's): only nearby pairs are computed, so large networks (a few
+    /// hundred words, all saved scenes together) still move smoothly.
+    static let repulsionRange: Float = 10
+
     /// One step of the simulation; returns how much the nodes moved.
     @discardableResult
     func step(_ graph: ExploreGraph, dt: Float = 1.0 / 60) -> Float {
         let ids = Array(positions.keys)
-        var force: [Int: SIMD3<Float>] = Dictionary(uniqueKeysWithValues: ids.map { ($0, .zero) })
-        // repulsion
-        for i in 0..<ids.count {
-            for j in (i + 1)..<ids.count {
-                let a = ids[i], b = ids[j]
-                var d = positions[a]! - positions[b]!
-                var len2 = simd_length_squared(d)
-                if len2 < 0.0001 {
-                    d = SIMD3(Self.jitter(a, 2), 0.01, Self.jitter(b, 2))
-                    len2 = 0.0001
+        let n = ids.count
+        var index: [Int: Int] = [:]
+        index.reserveCapacity(n)
+        for (i, id) in ids.enumerated() { index[id] = i }
+        let pos = ids.map { positions[$0]! }
+        var force = [SIMD3<Float>](repeating: .zero, count: n)
+
+        // repulsion between nearby nodes, found through a grid of repulsionRange cells
+        let range = Self.repulsionRange
+        let range2 = range * range
+        func cell(_ p: SIMD3<Float>) -> SIMD3<Int32> {
+            SIMD3(Int32((p.x / range).rounded(.down)), Int32((p.y / range).rounded(.down)),
+                  Int32((p.z / range).rounded(.down)))
+        }
+        var grid: [SIMD3<Int32>: [Int]] = [:]
+        for i in 0..<n { grid[cell(pos[i]), default: []].append(i) }
+        for i in 0..<n {
+            let c = cell(pos[i])
+            for dx in Int32(-1)...1 { for dy in Int32(-1)...1 { for dz in Int32(-1)...1 {
+                guard let others = grid[c &+ SIMD3(dx, dy, dz)] else { continue }
+                for j in others where j > i {
+                    var d = pos[i] - pos[j]
+                    var len2 = simd_length_squared(d)
+                    if len2 > range2 { continue }
+                    if len2 < 0.0001 {
+                        d = SIMD3(Self.jitter(ids[i], 2), 0.01, Self.jitter(ids[j], 2))
+                        len2 = 0.0001
+                    }
+                    let f = d / len2 * (9.0 / max(sqrt(len2), 0.3))
+                    force[i] += f
+                    force[j] -= f
                 }
-                let f = d / len2 * (9.0 / max(sqrt(len2), 0.3))
-                force[a]! += f
-                force[b]! -= f
-            }
+            }}}
         }
         // springs
         for e in graph.edges {
-            guard let pa = positions[e.a], let pb = positions[e.b] else { continue }
-            let d = pb - pa
+            guard let a = index[e.a], let b = index[e.b] else { continue }
+            let d = pos[b] - pos[a]
             let len = max(simd_length(d), 0.001)
             let rest = e.isMeaning ? Self.springLength * 1.2 : Self.springLength
             let f = d / len * (len - rest) * 1.6
-            force[e.a]! += f
-            force[e.b]! -= f
+            force[a] += f
+            force[b] -= f
         }
         // height by level, gentle pull to the vertical axis
-        for id in ids {
-            guard let node = graph.nodes[id] else { continue }
-            let p = positions[id]!
+        for i in 0..<n {
+            guard let node = graph.nodes[ids[i]] else { continue }
+            let p = pos[i]
             let targetY = Float(node.level) * Self.levelHeight
-            force[id]! += SIMD3(-p.x * 0.05, (targetY - p.y) * 4.0, -p.z * 0.05)
+            force[i] += SIMD3(-p.x * 0.05, (targetY - p.y) * 4.0, -p.z * 0.05)
         }
         var moved: Float = 0
-        for id in ids where !pinned.contains(id) {
-            var v = (velocities[id] ?? .zero) + force[id]! * dt
+        for i in 0..<n where !pinned.contains(ids[i]) {
+            let id = ids[i]
+            var v = (velocities[id] ?? .zero) + force[i] * dt
             v *= 0.85  // damping
             let speed = simd_length(v)
             if speed > 8 { v *= 8 / speed }
             velocities[id] = v
-            positions[id]! += v * dt
+            positions[id] = pos[i] + v * dt
             moved += simd_length(v) * dt
         }
         return moved

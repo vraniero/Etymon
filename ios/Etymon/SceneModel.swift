@@ -19,6 +19,8 @@ final class SceneModel {
     private(set) var lastSeen: [String: Date] = [:]
     /// Upright size of the image the boxes refer to.
     private(set) var imageSize: CGSize = .zero
+    /// The latest picture read carefully, kept for saving the scene.
+    private(set) var picture: ScenePicture?
     /// A word not re-found for this long has left the frame; its overlay hides. Longer
     /// than the gap between careful reads, so one missed read doesn't make it flicker.
     static let visibleFor: TimeInterval = 2.5
@@ -33,6 +35,9 @@ final class SceneModel {
     private(set) var rejected = Set<String>()
     /// True while words come from the camera or a photo (not typed): unknown words are dropped.
     private var collecting = false
+    /// The language each spoken word was said in, by lowercased word: sent with the word,
+    /// so a conversation in several languages resolves each word in its own.
+    private(set) var spokenLanguages: [String: String] = [:]
 
     /// Text seen so far, for detecting the scene's language.
     private var seenText = ""
@@ -45,7 +50,7 @@ final class SceneModel {
     /// a sign read in pieces still builds one scene; the oldest drop off past the word
     /// limit set in Settings.
     func add(text: String) {
-        let new = WordExtractor.words(in: text)
+        let new = WordExtractor.words(in: text).filter { !rejected.contains($0.lowercased()) }
         guard !new.isEmpty else { return }
         seenText = String((seenText + "\n" + text).suffix(2000))
         var merged = words
@@ -58,6 +63,20 @@ final class SceneModel {
         update(words: merged)
     }
 
+    /// What someone said (an utterance, in the language it was detected in). Like the
+    /// camera, it collects: the oldest words drop off past the word limit, and words the
+    /// dictionary doesn't know (misheard) stay out. Returns the words it brought.
+    @discardableResult
+    func hear(_ text: String, lang: String?) -> [String] {
+        collecting = true
+        let heard = WordExtractor.words(in: text).filter { !rejected.contains($0.lowercased()) }
+        if let lang {
+            for word in heard { spokenLanguages[word.lowercased()] = lang }
+        }
+        add(text: text)
+        return heard
+    }
+
     /// A recognition pass over a camera frame or photo. A full pass may add words; a quick
     /// tracking pass only moves the words already in the scene.
     ///
@@ -66,9 +85,15 @@ final class SceneModel {
     /// room, and new words are taken most prominent first (largest on screen, then reading
     /// order), so the same view always gives the same words.
     func see(_ recognition: Recognition, imageSize: CGSize, full: Bool, still: Bool = false,
-             now: Date = Date()) {
+             picture: ScenePicture.Source? = nil, now: Date = Date()) {
         self.imageSize = imageSize
         collecting = true
+        if full, let picture {
+            self.picture = ScenePicture(
+                source: picture,
+                boxes: Dictionary(recognition.words.map { ($0.key, $0.box) }) { a, _ in a },
+                size: imageSize)
+        }
         let known = Set(words.map { $0.lowercased() })
         let stamp = still ? Date.distantFuture : now
         for word in recognition.words where full || known.contains(word.key) {
@@ -150,6 +175,7 @@ final class SceneModel {
     /// Replace the scene with typed words (the first ones, up to the word limit).
     func set(typed text: String) {
         collecting = false
+        spokenLanguages = [:]
         seenText = text
         update(words: Array(WordExtractor.words(in: text).prefix(WordLimit.current)))
     }
@@ -166,13 +192,28 @@ final class SceneModel {
         words = []
         seenText = ""
         language = nil
+        spokenLanguages = [:]
         response = nil
         error = nil
         lastRequested = []
         boxes = [:]
         lastSeen = [:]
+        picture = nil
         sightings = [:]
         rejected = []
+    }
+
+    /// Show a saved scene as it was: its words where they were in its picture, its network
+    /// as the backend gave it then. Nothing is asked of the server.
+    func show(saved response: SceneResponse, boxes: [String: CGRect], imageSize: CGSize) {
+        pending?.cancel()
+        collecting = false
+        words = response.words.map(\.text)
+        lastRequested = words
+        self.response = response
+        self.boxes = boxes
+        self.imageSize = imageSize
+        lastSeen = boxes.mapValues { _ in .distantFuture }
     }
 
     private func update(words newWords: [String]) {
@@ -203,7 +244,9 @@ final class SceneModel {
         defer { isLoading = false }
         do {
             let depth = SearchDepth.current
-            let result = try await client().scene(words: requested, lang: language, maxCost: depth)
+            let languages = requested.map { spokenLanguages[$0.lowercased()] }
+            let result = try await client().scene(words: requested, lang: language, maxCost: depth,
+                                                  wordLanguages: languages)
             // a newer scene, or the same one at another depth, superseded this one
             guard requested == words, depth == SearchDepth.current else { return }
             response = result

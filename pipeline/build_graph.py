@@ -28,6 +28,7 @@ import unicodedata
 from pathlib import Path
 
 from modern import MODERN, zipf
+from refine import refine
 
 DATA = Path(__file__).parent / "data"
 
@@ -125,6 +126,20 @@ def affix_form(template, part, index, count):
         if index == count - 1:
             return "-" + part
     return part
+
+
+# Inline modifiers of newer templates ("-tio<alt:-tionem>", "𐬭𐬀𐬙𐬎<t:time period>",
+# "*septmas<ety:inh<ine-pro:*septm̥mós>>") and stray HTML tags: kept, they made a junk
+# node apart from the real word (8.5k such terms, cutting ~20k links).
+MODIFIER = re.compile(r"<[^<>]*>")
+
+
+def strip_modifiers(word):
+    while True:
+        stripped = MODIFIER.sub("", word)
+        if stripped == word:
+            return word
+        word = stripped
 
 
 def prose(text, word):
@@ -257,7 +272,7 @@ class Graph:
         return self._strip_cache[lang]
 
     def clean(self, lang, word):
-        word = (word or "").replace("[[", "").replace("]]", "").strip()
+        word = strip_modifiers((word or "").replace("[[", "").replace("]]", "")).strip()
         if not word or word in ("-", "?", "*"):
             return None
         word = unicodedata.normalize("NFD", word)
@@ -450,6 +465,7 @@ def main(out_path):
         CREATE INDEX term_word ON term(word COLLATE NOCASE);
     """)
     db.commit()
+    refine(db)  # spelling variants of reconstructions, lexical affixes
     for table in ("term", "edge", "form", "language"):
         print(f"{table}: {db.execute(f'SELECT count(*) FROM {table}').fetchone()[0]:,}")
     db.close()

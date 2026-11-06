@@ -15,7 +15,7 @@ final class EtymonUITests: XCTestCase {
     func testNetworkOverPhoto() {
         let app = XCUIApplication()
         app.launchArguments = ["-source", "photo", "-photo", sign]
-        app.launch()
+        launch(app)
 
         // shared roots float over the words: FARMACIA + Pharmacy -> pharmacia,
         // notte + night -> *nókʷts; same meaning: Aperta = Open
@@ -59,7 +59,7 @@ final class EtymonUITests: XCTestCase {
     func testTypedWords() {
         let app = XCUIApplication()
         app.launchArguments = ["-source", "type", "-demo"]
-        app.launch()
+        launch(app)
         XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["nox"].exists)
         XCTAssertTrue(app.staticTexts["= open"].exists)
@@ -81,7 +81,10 @@ final class EtymonUITests: XCTestCase {
         // the help screen explains the controls
         app.descendants(matching: .any)["help"].tap()
         XCTAssertTrue(app.navigationBars["How it works"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Type or paste words and press Connect; the network is shown as a graph."].exists)
+        // more modes than fit: the list renders rows as they scroll into view
+        let typeHelp = app.staticTexts["Type or paste words and press Connect; the network is shown as a graph."]
+        for _ in 0..<3 where !typeHelp.exists { app.swipeUp() }
+        XCTAssertTrue(typeHelp.exists)
         shot("7-help")
         app.navigationBars["How it works"].buttons["Done"].tap()
 
@@ -95,7 +98,7 @@ final class EtymonUITests: XCTestCase {
         let app = XCUIApplication()
         // the argument shows the map without changing the remembered Tree/Map choice
         app.launchArguments = ["-source", "type", "-demo", "-networkStyle", "map"]
-        app.launch()
+        launch(app)
         let follow = app.descendants(matching: .any)["journeyMenu"].firstMatch
         XCTAssertTrue(follow.waitForExistence(timeout: 15))
         sleep(2)
@@ -131,7 +134,7 @@ final class EtymonUITests: XCTestCase {
     func testExploreIn3D() {
         let app = XCUIApplication()
         app.launchArguments = ["-source", "type", "-demo"]
-        app.launch()
+        launch(app)
         XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 15))
 
         app.descendants(matching: .any)["explore"].firstMatch.tap()
@@ -186,6 +189,69 @@ final class EtymonUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         return condition()
+    }
+
+    /// Save the photo's scene, then lose the server: the saved scene, its overlay, a word's
+    /// lineage and Explore all still work from what is on the device.
+    func testSavedSceneWorksOffline() {
+        let app = XCUIApplication()
+        // a fresh in-memory store; no location prompt
+        app.launchArguments = ["-source", "photo", "-photo", sign, "-memoryStore",
+                               "-saveLocation", "NO"]
+        launch(app)
+        XCTAssertTrue(app.staticTexts["pharmacia"].waitForExistence(timeout: 30))
+
+        app.buttons["saveScene"].tap()
+        let object = app.textFields["saveObject"]
+        XCTAssertTrue(object.waitForExistence(timeout: 5))
+        object.tap()
+        object.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 30) + "pharmacy sign")
+        shot("5-save-scene")
+        app.buttons["confirmSave"].tap()
+        sleep(3)  // the words' lineages are fetched for offline use
+
+        // the server goes away
+        app.buttons["Settings"].tap()
+        let server = app.textFields["Server"]
+        XCTAssertTrue(server.waitForExistence(timeout: 5))
+        server.tap()
+        server.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 40) + "http://127.0.0.1:9")
+        app.buttons["Done"].tap()
+
+        app.buttons["library"].tap()
+        let row = app.buttons["savedScene"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["pharmacy sign"].exists)
+        shot("6-library")
+        row.tap()
+
+        // the picture with its network, as it was
+        let picture = app.images["savedPicture"]
+        XCTAssertTrue(picture.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["pharmacia"].waitForExistence(timeout: 5))
+        shot("7-saved-scene")
+        // the main screen's photo, under the sheet, has its own word-notte: take the saved one
+        let nottes = app.descendants(matching: .any).matching(identifier: "word-notte").allElementsBoundByIndex
+        let notte = nottes.first { $0.isHittable }
+        XCTAssertNotNil(notte)
+        notte?.tap()
+        let nox = app.staticTexts["nox"].waitForExistence(timeout: 10)
+        shot("7b-saved-word")
+        XCTAssertTrue(nox, "lineage should come from the device")
+        dismissSheet(app)
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()  // back to the list
+        app.buttons["exploreAll"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["explore3D"].waitForExistence(timeout: 10))
+        sleep(2)
+        shot("8-explore-all")
+        app.buttons["closeExplore"].tap()
+    }
+
+    /// Every test starts on the local backend, whatever an earlier test set in Settings.
+    private func launch(_ app: XCUIApplication) {
+        app.launchArguments += ["-api", "http://localhost:8000"]
+        app.launch()
     }
 
     private func dismissSheet(_ app: XCUIApplication) {

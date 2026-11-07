@@ -1,30 +1,52 @@
 import SwiftData
 import SwiftUI
 
-/// A chain of steps read top to bottom: word, "inherited from", ancestor, ...
+/// A chain of steps read top to bottom: word, "inherited from", ancestor, ... A word made of
+/// others goes on in branches: after the main line, each other part starts again from the
+/// word it is part of ("Eisenbahn, also built from", Eisen ...).
 struct ChainView: View {
     let steps: [Step]
     let node: (Int) -> Node?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                if index > 0 {
-                    Text(describe(kind: step.kind))
-                        .font(.caption).foregroundStyle(color(for: step.kind))
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                if let branch = row.branch {
+                    Text("\(node(branch)?.word ?? "?"), also")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .padding(.top, 8)
+                }
+                if row.index > 0 {
+                    Text(describe(kind: row.step.kind))
+                        .font(.caption).foregroundStyle(color(for: row.step.kind))
                         .padding(.leading, 12)
                 }
-                if let n = node(step.node) {
+                if let n = node(row.step.node) {
                     HStack(alignment: .firstTextBaseline) {
                         Text(n.word).font(.body.weight(.semibold)).italic(n.reconstructed)
                         Text(n.language).font(.caption).foregroundStyle(.secondary)
+                        if row.again { Text("(above)").font(.caption).foregroundStyle(.tertiary) }
                     }
-                    if let gloss = n.gloss {
+                    if let gloss = n.gloss, !row.again {
                         Text(gloss).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
             }
         }
+    }
+
+    /// Each step, with where a new branch starts (the word it goes up from) and whether
+    /// the node was already shown (two parts going back to the same word).
+    private var rows: [(index: Int, step: Step, branch: Int?, again: Bool)] {
+        var out: [(index: Int, step: Step, branch: Int?, again: Bool)] = []
+        var shown = Set<Int>(), previous: Int?
+        for (index, step) in steps.enumerated() {
+            let branch = step.from.flatMap { $0 != previous ? $0 : nil }
+            out.append((index, step, index > 0 ? branch : nil, shown.contains(step.node)))
+            shown.insert(step.node)
+            previous = step.node
+        }
+        return out
     }
 }
 

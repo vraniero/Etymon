@@ -29,7 +29,7 @@ struct Journey: Equatable {
     static func fromScene(_ response: SceneResponse, word i: Int) -> Journey? {
         var best: [Step] = []
         for c in response.connections where c.a == i || c.b == i {
-            let path = (c.a == i ? c.pathA : c.pathB) + c.deeper  // deeper starts above meet
+            let path = (c.a == i ? c.pathA : c.pathB) + c.deeper.mainLine(above: c.meet)
             if path.count > best.count { best = path }
         }
         let stops = best.compactMap { s in response.node(s.node).map { Stop(node: $0, kind: s.kind) } }
@@ -38,10 +38,9 @@ struct Journey: Equatable {
 
     /// A word's own lineage, from GET /word.
     static func fromWord(_ response: WordResponse) -> Journey? {
-        guard let entry = response.entries.max(by: { $0.lineage.count < $1.lineage.count }) else {
-            return nil
-        }
-        let steps = [Step(node: entry.term, kind: nil)] + entry.lineage
+        let lines = response.entries.map { ($0.term, $0.lineage.mainLine(above: $0.term)) }
+        guard let (term, line) = lines.max(by: { $0.1.count < $1.1.count }) else { return nil }
+        let steps = [Step(node: term, kind: nil)] + line
         let stops = steps.compactMap { s in response.node(s.node).map { Stop(node: $0, kind: s.kind) } }
         return stops.count > 1 ? Journey(word: response.text, stops: stops) : nil
     }

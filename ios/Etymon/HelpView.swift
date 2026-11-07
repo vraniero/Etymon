@@ -159,9 +159,10 @@ struct HelpView: View {
                                 + "shared ancestor.")
                     HelpRow(symbol: "hand.tap", title: "Tap a bubble",
                             text: "How the two words reach their shared ancestor, step by step, and "
-                                + "the deeper line above it to the oldest known root.")
+                                + "everything above it, up to the oldest known roots.")
                     HelpRow(symbol: "hand.point.up.left", title: "Tap a word",
-                            text: "That word's own lineage.")
+                            text: "That word's own lineage. A word made of others goes back through "
+                                + "each of them: football to foot and to ball.")
                     HelpRow(symbol: "ruler", title: "Search depth",
                             text: "How far back each word's ancestry is searched for shared roots "
                                 + "(default 16; each link costs about 1, a jump to a reconstructed "

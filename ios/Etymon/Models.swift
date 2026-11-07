@@ -94,6 +94,34 @@ struct SearchInfo: Codable, Hashable {
 struct Step: Codable, Hashable {
     let node: Int
     let kind: String?  // edge used to reach this node; nil for the starting word
+    /// In an ancestry (deeper, a word's lineage), the node this one is an ancestor of. A
+    /// word made of others has several branches (football: foot and ball). Nil in a path,
+    /// or from an older backend: the step before.
+    var from: Int? = nil
+}
+
+extension Array where Element == Step {
+    /// An ancestry's links above `start`, each as the node it goes up from and the step.
+    func links(above start: Int) -> [(child: Int, step: Step)] {
+        var previous = start
+        return map { step in
+            defer { previous = step.node }
+            return (step.from ?? previous, step)
+        }
+    }
+
+    /// The main line above `start`, for what shows one line (the journey, AR): the first
+    /// steps that each go on from the one before, then the roots stated along it.
+    func mainLine(above start: Int) -> [Step] {
+        var line: [Step] = [], last = start
+        for (child, step) in links(above: start) where child == last && step.kind != "root" {
+            line.append(step)
+            last = step.node
+        }
+        let on = Set([start] + line.map(\.node))
+        let roots = links(above: start).filter { $0.step.kind == "root" && on.contains($0.child) }
+        return line + roots.map(\.step).filter { !on.contains($0.node) }
+    }
 }
 
 struct Connection: Codable, Hashable, Identifiable {

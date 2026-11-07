@@ -124,6 +124,55 @@ def lineage(db, node, depth=12):
     return out
 
 
+def ancestry(db, node, depth=12, limit=40):
+    """Every ancestor above a node, not one line: a compound has one per part. football
+    goes back to foot and to ball (and Middle English fotbal, itself fot + bal); Handschuh
+    to Hand and Schuh. Each node follows its most direct link, as `lineage` does, and also
+    every part it is stated to be built from.
+
+    Returns (node, kind, child) triples, child being the node it is an ancestor of: the
+    main line first (the same as `lineage`), then the other branches, depth first. A node
+    reached twice (fotbal's fot is also foot's) appears once; the second link to it is
+    listed again with its own child. At most `limit` steps, `depth` along any branch."""
+    out, seen, linked = [], {node}, set()
+    marks = ",".join("?" * len(LINEAGE_ORDER))
+
+    def parents(n, top):
+        rows = db.execute(
+            f"SELECT e.dst, e.kind, e.inferred, d.word, d.lang FROM edge e "
+            f"JOIN term d ON d.id=e.dst WHERE e.src=? AND e.kind IN ({marks}) "
+            f"ORDER BY e.inferred, instr('{' '.join(LINEAGE_ORDER)}', e.kind)",
+            (n, *LINEAGE_ORDER)).fetchall()
+        # as in climb: a Proto-Indo-European word goes on only to what it is built from
+        rows = [r for r in rows if r[0] != n and not closed(db, r[0], r[3])
+                and (not top or r[1] == "component")]
+        parts = [r for r in rows[1:] if r[1] == "component" and not r[2] and r[0] != rows[0][0]]
+        return [(d, k, lang) for d, k, _, _, lang in rows[:1] + parts]
+
+    def walk(n, top, left, stack):
+        for dst, kind, lang in parents(n, top):
+            if len(out) >= limit:
+                return
+            if dst in stack or (n, dst) in linked:
+                continue  # a cycle in the data, or a link already listed
+            linked.add((n, dst))
+            out.append((dst, kind, n))
+            if dst not in seen:
+                seen.add(dst)
+                if left > 1:
+                    walk(dst, lang in TOP_LANGUAGES, left - 1, stack | {dst})
+
+    start = db.execute("SELECT lang FROM term WHERE id=?", (node,)).fetchone()
+    walk(node, bool(start) and start[0] in TOP_LANGUAGES, depth, {node})
+    # reconstructed roots stated on any word above (often only on the modern entry)
+    for n in [node] + [d for d, _, _ in out]:
+        for (r,) in db.execute("SELECT DISTINCT dst FROM edge WHERE kind='root' AND src=?", (n,)):
+            if r not in seen and len(out) < limit + 4:
+                seen.add(r)
+                out.append((r, "root", n))
+    return out
+
+
 def connect(db, a_ids, b_ids, limit=3):
     return meetings(climb(db, a_ids), climb(db, b_ids), limit)
 

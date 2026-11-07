@@ -20,11 +20,11 @@ from itertools import combinations
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 PIPELINE = Path(__file__).resolve().parent.parent / "pipeline"
 sys.path.insert(0, str(PIPELINE))
-from connect import MAX_COST, climb, closed, lineage, meetings  # noqa: E402
+from connect import MAX_COST, ancestry, climb, closed, lineage, meetings  # noqa: E402
 from query import MODERN, resolve  # noqa: E402
 
 DB_PATH = Path(os.environ.get("ETYMON_DB", PIPELINE / "data" / "etymon.sqlite"))
@@ -97,8 +97,12 @@ class SceneIn(BaseModel):
 
 
 class Step(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     node: int
     kind: str | None  # edge kind used to reach this node; None for the starting word
+    # In an ancestry (deeper, a word's lineage), the node this one is an ancestor of: a
+    # compound has several (football: foot and ball). Absent in a path, which is one line.
+    from_: int | None = Field(None, alias="from")
 
 
 class Connection(BaseModel):
@@ -109,7 +113,8 @@ class Connection(BaseModel):
     depth: float  # cost of the longer of the two paths: the search depth this connection needs
     path_a: list[Step]  # word a ... meet
     path_b: list[Step]  # word b ... meet
-    deeper: list[Step]  # meet ... oldest known ancestor / reconstructed root
+    deeper: list[Step]  # everything above meet, each step with its "from": the main line
+                        # to the oldest known ancestor first, then other branches
 
 
 class SemanticLink(BaseModel):
@@ -244,6 +249,11 @@ def steps(p):
     return [Step(node=n, kind=k) for n, k in p]
 
 
+def tree(a):
+    """An ancestry's (node, kind, child) triples as steps."""
+    return [Step(node=n, kind=k, from_=c) for n, k, c in a]
+
+
 # ---------- endpoints ----------
 
 @app.get("/health")
@@ -265,17 +275,20 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
         words.append(WordOut(text=text, lang=lang, terms=ids, meanings=meanings_for(db, ids)))
         trees.append(climb(db, ids, body.max_cost) if ids else {})
 
-    connections, used = [], set()
+    connections, used, above = [], set(), {}
     for (i, ta), (j, tb) in combinations(enumerate(trees), 2):
         if not ta or not tb or set(words[i].terms) & set(words[j].terms):
             continue
         for distance, meet, pa, pb in meetings(ta, tb, body.connections_per_pair):
-            deeper = lineage(db, meet)
+            if meet not in above:
+                above[meet] = ancestry(db, meet)
+            deeper = above[meet]
             connections.append(Connection(a=i, b=j, meet=meet, distance=distance,
                                           depth=max(ta[meet][0], tb[meet][0]),
                                           path_a=steps(pa), path_b=steps(pb),
-                                          deeper=steps(deeper)))
-            used.update(n for n, _ in pa + pb + deeper)
+                                          deeper=tree(deeper)))
+            used.update(n for n, _ in pa + pb)
+            used.update(n for n, _, _ in deeper)
     connections.sort(key=lambda c: c.distance)
     used.update(t for w in words for t in w.terms)
     semantic = semantic_links(words)
@@ -290,16 +303,17 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
 
 @app.get("/word")
 def word(text: str, lang: str | None = Query(None), db: sqlite3.Connection = Depends(get_db)):
-    """A single word's lineage, for tapping a word in the scene."""
+    """A single word's ancestry, for tapping a word in the scene: every ancestor, each
+    step with the node it comes from (a compound goes back through each of its parts)."""
     lang, ids = best_language(db, normalize(text), lang)
     if not ids:
         log.info(f"{_c('1;35', 'word ')}  {text}  {_c('2', 'not found')}")
         raise HTTPException(404, "word not found")
     out, used = [], set(ids)
     for tid in ids:
-        line = lineage(db, tid)
-        used.update(n for n, _ in line)
-        out.append({"term": tid, "lineage": steps(line)})
+        line = ancestry(db, tid)
+        used.update(n for n, _, _ in line)
+        out.append({"term": tid, "lineage": tree(line)})
     nodes = nodes_for(db, used)
     chain = " → ".join(nodes[n].word for n, _ in lineage(db, ids[0]) if n in nodes)
     log.info(f"{_c('1;35', 'word ')}  {text} ({lang})  {_c('2', chain)}")

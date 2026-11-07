@@ -327,7 +327,7 @@ struct ARBranchLayout {
         // the root's own ancestry, older and higher
         var below = (key: "\(meet)", position: top)
         // the oldest ancestor always shows; the steps up to it are thinned like the paths
-        let deeper = response.connections.first { $0.meet == meet }?.deeper ?? []
+        let deeper = response.connections.first { $0.meet == meet }?.deeper.mainLine(above: meet) ?? []
         var above = deeper
         var jump = 0
         if let oldest = deeper.last, middle != TreeDepth.all {

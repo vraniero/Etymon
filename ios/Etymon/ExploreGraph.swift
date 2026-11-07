@@ -88,12 +88,13 @@ final class ExploreGraph: Identifiable {
                                        meaning: nil))
                 }
             }
-            let chain = [Step(node: c.meet, kind: nil)] + c.deeper
-            for (child, parent) in zip(chain, chain.dropFirst()) {
+            // everything above the meeting point: each part of a compound is a branch
+            for (child, parent) in c.deeper.links(above: c.meet) {
                 if let n = r.node(parent.node), nodes[parent.node] == nil {
                     add(n, role: .ancestor, level: 1)
                 }
-                edges.insert(XEdge(a: child.node, b: parent.node, kind: parent.kind ?? "derived",
+                guard nodes[child] != nil, nodes[parent.node] != nil else { continue }
+                edges.insert(XEdge(a: child, b: parent.node, kind: parent.kind ?? "derived",
                                    meaning: nil))
             }
             if nodes[c.meet]?.role != .scene { nodes[c.meet]?.role = .meeting }
@@ -108,9 +109,10 @@ final class ExploreGraph: Identifiable {
         version += 1
     }
 
-    /// A word just said, and its tree: the word on the ground, its line of ancestors above
-    /// it (up to `maxSteps`). Where the line reaches an ancestor another word's line already
-    /// reached, or another word said, the two are connected there.
+    /// A word just said, and its tree: the word on the ground, its ancestors above it (up
+    /// to `maxSteps` along each branch: a compound goes up through each of its parts).
+    /// Where a branch reaches an ancestor another word's tree already reached, or another
+    /// word said, the two are connected there.
     func grow(term: Int, label: String, lineage: [Step], nodes lineageNodes: [String: Node],
               speaker: Int? = nil, maxSteps: Int = 6) {
         if let existing = nodes[term] {
@@ -126,20 +128,25 @@ final class ExploreGraph: Identifiable {
             return
         }
         if let speaker { speakers[term] = speaker }
-        var child = term
-        var met = false  // above the first ancestor shared, the line is already joined
-        for step in lineage.filter({ $0.node != term }).prefix(maxSteps) {
+        var steps = [term: 0]
+        var met = [term: false]  // above the first ancestor shared, a branch is already joined
+        for (child, step) in lineage.links(above: term) where step.node != term {
+            guard let below = steps[child], below < maxSteps else { continue }
             if nodes[step.node] == nil {
-                guard let n = lineageNodes[String(step.node)] else { break }
+                guard let n = lineageNodes[String(step.node)] else { continue }
                 add(n, role: .ancestor, level: 1)
             }
             edges.insert(XEdge(a: child, b: step.node, kind: step.kind ?? "derived", meaning: nil))
             reachedBy[step.node, default: []].insert(term)
+            var joined = met[child] ?? false
             if reachedBy[step.node]!.count >= 2 || nodes[step.node]?.role == .scene {
-                if !met, nodes[step.node]?.role == .ancestor { nodes[step.node]!.role = .meeting }
-                met = true
+                if !joined, nodes[step.node]?.role == .ancestor { nodes[step.node]!.role = .meeting }
+                joined = true
             }
-            child = step.node
+            if steps[step.node] == nil {
+                steps[step.node] = below + 1
+                met[step.node] = joined
+            }
         }
         relevel()
         version += 1
@@ -194,36 +201,52 @@ final class ExploreGraph: Identifiable {
     }
 
     /// Join scene words through their lineages (GET /word, cached on the device): each
-    /// word's chain of ancestors is followed up to the first ancestor it shares with another
-    /// scene word, which becomes a meeting point. This links words of different saved scenes
-    /// (padre in one, paternalistic in another) without asking the server for a new scene.
-    /// Chains are cut at `maxSteps` so links through distant roots stay out.
+    /// word's ancestors are followed, along every branch, up to the first ancestor it
+    /// shares with another scene word, which becomes a meeting point. This links words of
+    /// different saved scenes (padre in one, paternalistic in another) without asking the
+    /// server for a new scene. Branches are cut at `maxSteps` so links through distant
+    /// roots stay out.
     func join(lineages: [Int: [Step]], nodes lineageNodes: [String: Node], maxSteps: Int = 8) {
-        var chains: [Int: [Step]] = [:]
-        for (term, steps) in lineages where nodes[term]?.role == .scene {
-            chains[term] = Array(steps.prefix(maxSteps))
+        // each word's tree: how every ancestor in it is reached (the first way listed)
+        var trees: [Int: [Int: (child: Int, step: Step)]] = [:]
+        for (term, lineage) in lineages where nodes[term]?.role == .scene {
+            var depth = [term: 0], reach: [Int: (child: Int, step: Step)] = [:]
+            for (child, step) in lineage.links(above: term) where step.node != term {
+                guard let d = depth[child], d < maxSteps, depth[step.node] == nil else { continue }
+                depth[step.node] = d + 1
+                reach[step.node] = (child, step)
+            }
+            trees[term] = reach
         }
         var sharedBy: [Int: Set<Int>] = [:]
-        for (term, chain) in chains {
-            for step in chain where step.node != term { sharedBy[step.node, default: []].insert(term) }
+        for (term, reach) in trees {
+            for node in reach.keys { sharedBy[node, default: []].insert(term) }
         }
         var changed = false
-        for (term, chain) in chains.sorted(by: { $0.key < $1.key }) {
+        for (term, reach) in trees.sorted(by: { $0.key < $1.key }) {
             // a scene word that is itself an ancestor of another (pater) also meets there
-            guard let k = chain.firstIndex(where: {
-                (sharedBy[$0.node]?.count ?? 0) >= 2 || (nodes[$0.node]?.role == .scene && $0.node != term)
-            }) else { continue }
-            var child = term
-            for step in chain[...k] {
-                if nodes[step.node] == nil, let n = lineageNodes[String(step.node)] {
-                    add(n, role: .ancestor, level: 1)
-                }
-                guard nodes[step.node] != nil else { break }
-                edges.insert(XEdge(a: child, b: step.node, kind: step.kind ?? "derived", meaning: nil))
-                child = step.node
-                changed = true
+            func meets(_ n: Int) -> Bool {
+                (sharedBy[n]?.count ?? 0) >= 2 || (nodes[n]?.role == .scene && n != term)
             }
-            if nodes[chain[k].node]?.role == .ancestor { nodes[chain[k].node]?.role = .meeting }
+            func route(to n: Int) -> [(child: Int, step: Step)] {
+                var out: [(child: Int, step: Step)] = [], at = n
+                while let r = reach[at] { out.append(r); at = r.child }
+                return out.reversed()
+            }
+            for meet in reach.keys.sorted() where meets(meet) {
+                let way = route(to: meet)
+                // only the first shared ancestor on the way: above it the branch is joined
+                guard !way.dropLast().contains(where: { meets($0.step.node) }) else { continue }
+                for (child, step) in way {
+                    if nodes[step.node] == nil, let n = lineageNodes[String(step.node)] {
+                        add(n, role: .ancestor, level: 1)
+                    }
+                    guard nodes[step.node] != nil, nodes[child] != nil else { break }
+                    edges.insert(XEdge(a: child, b: step.node, kind: step.kind ?? "derived", meaning: nil))
+                    changed = true
+                }
+                if nodes[meet]?.role == .ancestor { nodes[meet]?.role = .meeting }
+            }
         }
         guard changed else { return }
         relevel()

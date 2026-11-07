@@ -5,13 +5,18 @@
            text frames (JSON):
              {"type": "merge", "keep": "P1", "drop": "P3"}   two voices are one person
              {"type": "reset"}                                forget voices, restart the clock
-      out  {"type": "ready"}                                  models loaded
+      out  {"type": "ready", "languages": ["de", "en", ...]}  models loaded
            {"type": "speech", "start": 12.40}                 someone started talking
-           {"type": "silence", "end": 15.10}                  ... and stopped
+           {"type": "silence", "end": 15.10, "kept": true}    ... and stopped (kept: long
+                                                              enough to be transcribed)
+           {"type": "unheard", "start": 12.4, "end": 15.1}    transcribed: no words in it
            {"type": "utterance", "id": 3, "persona": "P2", "new_persona": false,
-            "similarity": 0.81, "lang": "it", "start": 12.4, "end": 15.1,
+            "similarity": 0.81, "lang": "it", "detected": "it", "start": 12.4, "end": 15.1,
             "text": "La farmacia è aperta", "words": [{"text": "farmacia", "start": 12.6,
             "end": 13.1}, ...]}
+
+"lang" is the language the words are looked up in (null: not one the backend knows);
+"detected" is what Whisper heard, even a language the backend doesn't know.
 
 Times are seconds of audio since the stream (or the last reset) began, so the phone can
 line them up with what its camera saw: whose mouth was moving, which screen was on.
@@ -70,7 +75,8 @@ class Segmenter:
         return bool(self._utterance)
 
     def feed(self, audio: np.ndarray):
-        """Yield ("speech", start) / ("utterance", start, audio) / ("silence", end) events."""
+        """Yield ("speech", start) / ("silence", end, kept) / ("utterance", start, audio) events:
+        kept says an utterance follows (it was long enough, not a click)."""
         self._pending = np.concatenate([self._pending, audio])
         while len(self._pending) >= FRAME:
             frame, self._pending = self._pending[:FRAME], self._pending[FRAME:]
@@ -104,8 +110,9 @@ class Segmenter:
         audio = np.concatenate(frames)
         start = self._start / RATE
         self._utterance, self._quiet = [], 0
-        yield ("silence", start + len(audio) / RATE)
-        if len(audio) / RATE >= self.shortest:
+        kept = len(audio) / RATE >= self.shortest
+        yield ("silence", start + len(audio) / RATE, kept)
+        if kept:
             yield ("utterance", start, audio)
 
 
@@ -193,8 +200,10 @@ class Engine:
             tensor = self._torch.from_numpy(audio)[None]
             return self._encoder.encode_batch(tensor).squeeze().numpy()
 
-    def transcribe(self, audio: np.ndarray, fallback: str | None) -> tuple[str | None, list[dict]]:
-        """The language spoken and the words with their times (seconds into `audio`).
+    def transcribe(self, audio: np.ndarray, fallback: str | None
+                   ) -> tuple[str | None, list[dict], str | None]:
+        """The language spoken (if the backend knows it), the words with their times
+        (seconds into `audio`), and the language Whisper detected.
 
         A language the backend doesn't know (a misdetection, usually) is retried as the
         speaker's previous language."""
@@ -202,7 +211,7 @@ class Engine:
             kw = dict(path_or_hf_repo=WHISPER_MODEL, word_timestamps=True,
                       condition_on_previous_text=False)
             result = self._whisper.transcribe(audio, **kw)
-            lang = result.get("language")
+            lang = detected = result.get("language")
             if lang not in LANGUAGES and fallback:
                 result = self._whisper.transcribe(audio, language=fallback, **kw)
                 lang = fallback
@@ -210,7 +219,7 @@ class Engine:
                   "end": round(float(w["end"]), 2)}
                  for s in result.get("segments", []) for w in s.get("words", [])
                  if w["word"].strip()]
-        return (lang if lang in LANGUAGES else None), words
+        return (lang if lang in LANGUAGES else None), words, detected
 
 
 engine = Engine()
@@ -230,9 +239,10 @@ class Session:
     def hear(self, start: float, audio: np.ndarray) -> dict | None:
         embedding = self.engine.embed(audio)
         known, _ = self.voices.match(embedding)
-        lang, words = self.engine.transcribe(audio, fallback=known.lang if known else None)
+        lang, words, detected = self.engine.transcribe(audio, fallback=known.lang if known else None)
+        end = round(start + len(audio) / RATE, 2)
         if not words:  # a cough, a door: not speech after all, and no one's voice
-            return None
+            return {"type": "unheard", "start": round(start, 2), "end": end}
         persona, new, similarity = self.voices.assign(embedding)
         if lang:
             persona.lang = lang
@@ -241,8 +251,8 @@ class Session:
             w["end"] = round(start + w["end"], 2)
         out = {"type": "utterance", "id": self.next_id, "persona": persona.id,
                "new_persona": new, "similarity": round(similarity, 2),
-               "lang": WIKTIONARY.get(lang, lang) if lang else None,
-               "start": round(start, 2), "end": round(start + len(audio) / RATE, 2),
+               "lang": WIKTIONARY.get(lang, lang) if lang else None, "detected": detected,
+               "start": round(start, 2), "end": end,
                "text": " ".join(w["text"] for w in words), "words": words}
         self.next_id += 1
         return out
@@ -254,7 +264,7 @@ async def listen(ws: WebSocket):
     await asyncio.to_thread(engine.load)
     session = Session(engine)
     queue: asyncio.Queue = asyncio.Queue()
-    await ws.send_json({"type": "ready"})
+    await ws.send_json({"type": "ready", "languages": sorted(LANGUAGES)})
     log.info("listen  connected")
 
     async def work():
@@ -262,10 +272,12 @@ async def listen(ws: WebSocket):
         while True:
             start, audio, generation = await queue.get()
             out = await asyncio.to_thread(session.hear, start, audio)
-            if out and generation == session_generation[0]:
+            if generation != session_generation[0]:
+                continue
+            if out["type"] == "utterance":
                 log.info(f"listen  {out['persona']}{'*' if out['new_persona'] else ''} "
                          f"[{out['lang'] or '--'}] {out['text']}")
-                await ws.send_json(out)
+            await ws.send_json(out)
 
     session_generation = [0]
     worker = asyncio.create_task(work())
@@ -279,9 +291,11 @@ async def listen(ws: WebSocket):
                 for event in session.segmenter.feed(audio):
                     if event[0] == "utterance":
                         queue.put_nowait((event[1], event[2], session_generation[0]))
+                    elif event[0] == "speech":
+                        await ws.send_json({"type": "speech", "start": round(event[1], 2)})
                     else:
-                        await ws.send_json({"type": event[0],
-                                            ("start" if event[0] == "speech" else "end"): round(event[1], 2)})
+                        await ws.send_json({"type": "silence", "end": round(event[1], 2),
+                                            "kept": event[2]})
             elif (text := message.get("text")) is not None:
                 command = json.loads(text)
                 if command.get("type") == "merge":

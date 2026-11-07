@@ -15,7 +15,10 @@ struct ExploreView: View {
     var speakers: Set<Int> = []
     /// Talk has its own controls (and counts) where the header would be.
     var showsHeader = true
+    /// Explore of the live scene: clear everything from here, after offering to save it.
+    var startOver: (save: () -> Void, discard: () -> Void)?
     var onClose: (() -> Void)?
+    @State private var confirmStartOver = false
     @AppStorage(TreeDepth.storageKey) private var treeDepth = TreeDepth.defaultValue
     @AppStorage(ExploreScope.storageKey) private var scope: ExploreScope = .whole
 
@@ -81,6 +84,21 @@ struct ExploreView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("closeExplore")
+            }
+            if let startOver {
+                Button("Start over", systemImage: "trash") { confirmStartOver = true }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                    .disabled(graph.nodes.isEmpty)
+                    .accessibilityIdentifier("exploreStartOver")
+                    .confirmationDialog("Start a new scene?", isPresented: $confirmStartOver,
+                                        titleVisibility: .visible) {
+                        Button("Save to library…") { startOver.save() }
+                        Button("Discard and start over", role: .destructive) { startOver.discard() }
+                    } message: {
+                        Text("The words and network so far go away. Save them to your library "
+                             + "to keep them — saved scenes work offline.")
+                    }
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 6) {
@@ -401,6 +419,12 @@ struct NetworkScene: UIViewRepresentable {
         pan.maximumNumberOfTouches = 2
         pan.delegate = context.coordinator
         view.addGestureRecognizer(pan)
+        // pinch zooms toward the point the view turns around, together with the slide
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pinch(_:)))
+        pinch.delegate = context.coordinator
+        view.addGestureRecognizer(pinch)
+        context.coordinator.own = [pan, pinch]
+        context.coordinator.takeOverTwoFingers()
         context.coordinator.sync(graph, depth: depth, speakers: speakers, scope: scope)
         context.coordinator.frameAll()
         context.coordinator.start()
@@ -691,7 +715,7 @@ struct NetworkScene: UIViewRepresentable {
 
         // MARK: gestures
 
-        /// Set once the user slides the view: growing networks stop re-framing it.
+        /// Set once the user moves the view (turn, slide, zoom): growing networks stop re-framing it.
         private var userMoved = false
 
         /// Two-finger drag: the camera and the point it turns around slide together, sideways
@@ -710,9 +734,46 @@ struct NetworkScene: UIViewRepresentable {
             userMoved = true
         }
 
+        /// Two fingers zoom: closer to or farther from the point the view turns around.
+        @objc func pinch(_ gesture: UIPinchGestureRecognizer) {
+            guard let view, let pov = view.pointOfView, gesture.scale > 0 else { return }
+            let target = SIMD3<Float>(view.defaultCameraController.target)
+            let offset = pov.simdWorldPosition - target
+            let distance = simd_length(offset)
+            guard distance > 0 else { return }
+            let zoomed = min(max(distance / Float(gesture.scale), 2), 3000)
+            pov.simdWorldPosition = target + offset / distance * zoomed
+            gesture.scale = 1
+            userMoved = true
+        }
+
+        /// The pan and pinch added here.
+        var own: [UIGestureRecognizer] = []
+
+        /// SceneKit's camera control has its own pinch and two-finger slide, which fight ours
+        /// for the same two fingers: ours do both together, so theirs are switched off. Its
+        /// one-finger turn stays, and any use of it stops the view re-framing by itself.
+        /// Called again whenever camera control is switched back on, which re-adds them.
+        func takeOverTwoFingers() {
+            guard let view else { return }
+            for g in view.gestureRecognizers ?? [] where !own.contains(where: { $0 === g }) {
+                if g is UIPinchGestureRecognizer || g is UIRotationGestureRecognizer {
+                    g.isEnabled = false
+                } else if let p = g as? UIPanGestureRecognizer {
+                    if p.minimumNumberOfTouches >= 2 { p.isEnabled = false } else { p.maximumNumberOfTouches = 1 }
+                    p.removeTarget(self, action: #selector(touched(_:)))
+                    p.addTarget(self, action: #selector(touched(_:)))
+                }
+            }
+        }
+
+        @objc private func touched(_ gesture: UIGestureRecognizer) {
+            if gesture.state == .began { userMoved = true }
+        }
+
         func gestureRecognizer(_ g: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-            g is UIPanGestureRecognizer && other is UIPinchGestureRecognizer
+            own.contains { $0 === g } && own.contains { $0 === other }
         }
 
         private func nodeID(at point: CGPoint) -> Int? {
@@ -754,6 +815,7 @@ struct NetworkScene: UIViewRepresentable {
             default:
                 dragging = nil
                 view.allowsCameraControl = true
+                takeOverTwoFingers()
                 settleFrames = 120
             }
         }

@@ -115,6 +115,32 @@ final class SceneResponseTests: XCTestCase {
         XCTAssertGreaterThan(full.items.count, compact.items.count)
         XCTAssertGreaterThan(full.maxLevel, compact.maxLevel)
     }
+
+    /// Words and meeting points always; of the steps between, as many as asked (nearest the
+    /// word), the rest one shortcut that counts them.
+    func testMiddleStepsAreThinnedToTheChosenNumber() throws {
+        let r = try Self.fixture()
+        let full = GraphLayout(r, middle: -1)
+        XCTAssertEqual(full.items.count, GraphLayout(r, compact: false).items.count)
+        XCTAssertTrue(full.links.allSatisfy { $0.skipped == 0 })
+        let none = GraphLayout(r, middle: 0)
+        XCTAssertEqual(none.items.count, GraphLayout(r).items.count)
+        let longest = r.connections.flatMap { [$0.pathA.count, $0.pathB.count] }.max() ?? 0
+        XCTAssertGreaterThan(longest, 2, "the fixture needs a path with steps in between")
+        var previous = none.items.count
+        for keep in 1...max(longest - 2, 1) {
+            let layout = GraphLayout(r, middle: keep)
+            XCTAssertGreaterThanOrEqual(layout.items.count, previous)
+            previous = layout.items.count
+            for link in layout.links where link.skipped > 0 {
+                XCTAssertTrue(none.items[link.to]?.isMeeting == true || layout.items[link.to] != nil)
+            }
+        }
+        XCTAssertEqual(previous, full.items.count, "keeping every step is the full drawing")
+        // what a shortcut leaves out plus what's drawn adds up to the path
+        let one = GraphLayout(r, middle: 1)
+        XCTAssertTrue(one.links.contains { $0.skipped > 0 } || longest <= 3)
+    }
 }
 
 

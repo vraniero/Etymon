@@ -7,6 +7,8 @@ import SwiftUI
 struct NetworkView: View {
     let response: SceneResponse
     var compact = true
+    /// Steps drawn between a word and where it meets another (overrides compact; -1: all).
+    var middle: Int?
     var onSelect: (GraphLayout.Key) -> Void
     @AppStorage(NetworkStyle.storageKey) private var style: NetworkStyle = .tree
 
@@ -37,7 +39,7 @@ struct NetworkView: View {
                     SearchDepthBar(search: search)
                 }
                 ForEach(clusters, id: \.self) { cluster in
-                    ClusterGraph(layout: GraphLayout(response, compact: compact, only: Set(cluster)),
+                    ClusterGraph(layout: GraphLayout(response, compact: compact, middle: middle, only: Set(cluster)),
                                  response: response,
                                  semantic: response.semanticLinks.filter { cluster.contains($0.a) },
                                  onSelect: onSelect)
@@ -90,9 +92,10 @@ private struct ClusterGraph: View {
                         path.move(to: p)
                         path.addCurve(to: q, control1: CGPoint(x: p.x, y: (p.y + q.y) / 2),
                                       control2: CGPoint(x: q.x, y: (p.y + q.y) / 2))
-                        context.stroke(path, with: .color(color(for: link.kind).opacity(0.8)),
-                                       style: StrokeStyle(lineWidth: 2,
-                                                          dash: link.kind == "borrowed" ? [5, 4] : []))
+                        context.stroke(path, with: .color(color(for: link.kind).opacity(link.skipped > 0 ? 0.45 : 0.8)),
+                                       style: StrokeStyle(lineWidth: link.skipped > 0 ? 1.5 : 2,
+                                                          dash: link.kind == "borrowed" ? [5, 4]
+                                                              : link.skipped > 0 ? [2, 3] : []))
                     }
                     // same meaning: dashed green arcs under the two words
                     for link in semantic {
@@ -106,6 +109,17 @@ private struct ClusterGraph: View {
                                           control: CGPoint(x: (p.x + q.x) / 2, y: p.y + 20 + below))
                         context.stroke(path, with: .color(.green),
                                        style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    }
+                }
+                // a shortcut says how many steps it leaves out
+                ForEach(layout.links.filter { $0.skipped > 0 }, id: \.self) { link in
+                    if let a = layout.items[link.from], let b = layout.items[link.to] {
+                        let p = point(a, in: size, below: below), q = point(b, in: size, below: below)
+                        Text("+\(link.skipped) step\(link.skipped == 1 ? "" : "s")")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(Color(.systemBackground).opacity(0.85)))
+                            .position(x: (p.x + q.x) / 2, y: (p.y + q.y) / 2)
                     }
                 }
                 ForEach(Array(layout.items.values)) { item in

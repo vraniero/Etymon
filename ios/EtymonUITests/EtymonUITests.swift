@@ -187,6 +187,20 @@ final class EtymonUITests: XCTestCase {
 
         app.buttons["closeExplore"].tap()
         XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
+
+        // Start over from inside Explore: the scene is cleared and Explore closes
+        let reopen = app.descendants(matching: .any)["explore"].firstMatch
+        XCTAssertTrue(reopen.waitForExistence(timeout: 5))
+        reopen.tap()
+        let clear = app.buttons["exploreStartOver"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        clear.tap()
+        let discard = app.buttons["Discard and start over"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 5))
+        discard.tap()
+        XCTAssertTrue(app.buttons["closeExplore"].waitForNonExistence(timeout: 5), "Explore closes")
+        XCTAssertTrue(app.staticTexts["pater"].waitForNonExistence(timeout: 5), "the scene is empty")
+        XCTAssertFalse(app.buttons["startOver"].isEnabled)
     }
 
     private func waitFor(_ timeout: TimeInterval = 3, _ condition: () -> Bool) -> Bool {

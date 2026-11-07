@@ -165,7 +165,10 @@ struct ContentView: View {
             .sheet(item: $draft) { SaveSceneView(draft: $0) }
             .sheet(isPresented: $showLibrary) { LibraryView() }
             .fullScreenCover(item: $exploreGraph) { graph in
-                ExploreView(graph: graph) { exploreGraph = nil }
+                ExploreView(graph: graph, startOver: (
+                    save: { exploreGraph = nil; afterExploreCloses { save() } },
+                    discard: { exploreGraph = nil; startOver() }
+                )) { exploreGraph = nil }
             }
         }
     }

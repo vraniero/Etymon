@@ -41,8 +41,9 @@ class FakeEngine:
         self.fallbacks.append(fallback)
         n = len(self.words)
         span = len(audio) / RATE
-        return self.lang, [{"text": w, "start": i * span / n, "end": (i + 1) * span / n}
-                           for i, w in enumerate(self.words)]
+        words = [{"text": w, "start": i * span / n, "end": (i + 1) * span / n}
+                 for i, w in enumerate(self.words)]
+        return (self.lang if self.lang in listen.LANGUAGES else None), words, self.lang
 
 
 def events(segmenter, audio, chunk=1600):
@@ -67,6 +68,7 @@ def test_segmenter_drops_clicks_and_cuts_monologues():
     seg = Segmenter(longest=3.0)
     click = events(seg, np.concatenate([tone(0.1), quiet(1.0)]))
     assert [e[0] for e in click] == ["speech", "silence"]  # too short to be an utterance
+    assert click[1][2] is False  # ... and the silence says so
     long = events(seg, tone(7.0))
     assert sum(e[0] == "utterance" for e in long) == 2  # cut at 3 s, 3 s; the rest pending
     assert [e[0] for e in seg.flush()] == ["silence", "utterance"]
@@ -102,10 +104,16 @@ def test_session_attributes_words_to_personas_in_stream_time():
 def test_session_ignores_sounds_without_words_and_maps_serbo_croatian():
     engine = FakeEngine(words=[])
     session = Session(engine)
-    assert session.hear(0.0, tone(1.0)) is None
+    assert session.hear(0.0, tone(1.0)) == {"type": "unheard", "start": 0.0, "end": 1.0}
     assert session.voices.personas == []  # noise doesn't become a persona
     engine.words, engine.lang = ["noć"], "hr"
     assert session.hear(1.0, tone(1.0))["lang"] == "sh"
+
+
+def test_session_says_which_language_it_heard_even_one_it_does_not_know():
+    engine = FakeEngine(words=["konnichiwa"], lang="ja")
+    out = Session(engine).hear(0.0, tone(1.0))
+    assert out["lang"] is None and out["detected"] == "ja"
 
 
 def test_listen_websocket(monkeypatch):
@@ -113,7 +121,8 @@ def test_listen_websocket(monkeypatch):
     app = FastAPI()
     app.include_router(listen.router)
     with TestClient(app).websocket_connect("/listen") as ws:
-        assert ws.receive_json() == {"type": "ready"}
+        ready = ws.receive_json()
+        assert ready["type"] == "ready" and "it" in ready["languages"]
         audio = np.concatenate([quiet(0.3), tone(1.0, 220), quiet(1.0),
                                 tone(1.0, 660), quiet(1.0)])
         for i in range(0, len(audio), 3200):
@@ -125,6 +134,7 @@ def test_listen_websocket(monkeypatch):
         assert utterances[0]["start"] == pytest.approx(0.3, abs=0.04)
         assert [m["type"] for m in got if m["type"] != "utterance"] == \
             ["speech", "silence", "speech", "silence"]
+        assert all(m["kept"] for m in got if m["type"] == "silence")
         ws.send_text('{"type": "merge", "keep": "P1", "drop": "P2"}')
         for i in range(0, 3 * RATE, 3200):
             ws.send_bytes(pcm(np.concatenate([tone(1.0, 660), quiet(2.0)])[i:i + 3200]))

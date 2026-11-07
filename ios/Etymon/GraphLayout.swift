@@ -22,6 +22,7 @@ struct GraphLayout {
         let from: Key  // younger
         let to: Key  // older
         let kind: String?
+        var skipped = 0  // steps left out between the two (a shortcut), drawn as "+N"
     }
 
     private(set) var items: [Key: Item] = [:]
@@ -33,8 +34,11 @@ struct GraphLayout {
 
     /// compact: draw each scene word straight to its meeting points (the common
     /// denominators); the full chains are in the detail sheet. Otherwise every step.
+    /// middle, when given, overrides compact: how many steps between a word and its meeting
+    /// point to draw (the ones nearest the word), the rest a shortcut; negative: all.
     /// only: restrict to a subset of scene words (one cluster); nil = all.
-    init(_ response: SceneResponse, compact: Bool = true, only: Set<Int>? = nil) {
+    init(_ response: SceneResponse, compact: Bool = true, middle: Int? = nil, only: Set<Int>? = nil) {
+        let keep: Int? = middle.map { $0 < 0 ? nil : $0 } ?? (compact ? 0 : nil)
         let wordIndices = response.words.indices.filter { only?.contains($0) ?? true }
         let connections = response.connections.filter {
             only == nil || (only!.contains($0.a) && only!.contains($0.b))
@@ -51,10 +55,16 @@ struct GraphLayout {
 
         func add(path: [Step], word: Int) {
             var child = Key.word(word)
-            if compact, let last = path.last, path.count > 1 {
-                let key = nodeKey(last.node)
-                // single-step links keep their kind; collapsed chains are drawn neutral
-                linkSet.insert(Link(from: child, to: key, kind: path.count == 2 ? last.kind : nil))
+            let between = max(path.count - 2, 0)  // steps between the word and the meeting
+            if let keep, keep < between, let last = path.last {
+                for step in path.dropFirst().prefix(keep) {
+                    let key = nodeKey(step.node)
+                    linkSet.insert(Link(from: child, to: key, kind: step.kind))
+                    child = key
+                }
+                // the rest: one shortcut, drawn neutral, saying how many it stands for
+                linkSet.insert(Link(from: child, to: nodeKey(last.node), kind: nil,
+                                    skipped: between - keep))
                 return
             }
             for step in path.dropFirst() {

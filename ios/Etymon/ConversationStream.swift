@@ -21,6 +21,8 @@ final class ConversationStream: @unchecked Sendable {
         let newPersona: Bool
         let similarity: Double
         let lang: String?
+        /// What Whisper heard, even a language the backend doesn't know ("ja").
+        let detected: String?
         let start: Double
         let end: Double
         let text: String
@@ -28,9 +30,14 @@ final class ConversationStream: @unchecked Sendable {
     }
 
     enum Event {
-        case ready
+        /// Models loaded; the languages it understands.
+        case ready(languages: [String])
         case speech(at: Double)
-        case silence(at: Double)
+        /// Someone stopped; `kept`: long enough to be transcribed (an utterance or `unheard`
+        /// follows), not a click.
+        case silence(at: Double, kept: Bool)
+        /// A sound transcribed to no words.
+        case unheard
         case utterance(Utterance)
         case failed(String)
     }
@@ -48,6 +55,9 @@ final class ConversationStream: @unchecked Sendable {
 
     /// Called on the main actor.
     var onEvent: (@MainActor (Event) -> Void)?
+    /// How loud the microphone is, 0…1, about 12 times a second. Called on the main actor.
+    var onLevel: (@MainActor (Float) -> Void)?
+    private var lastLevel: TimeInterval = 0
 
     static let sampleRate = 16_000.0
     private let engine = AVAudioEngine()
@@ -93,6 +103,7 @@ final class ConversationStream: @unchecked Sendable {
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, when in
             self?.send(buffer, at: when)
+            self?.measure(buffer)
         }
         engine.prepare()
         try engine.start()
@@ -121,6 +132,23 @@ final class ConversationStream: @unchecked Sendable {
     }
 
     // MARK: audio out
+
+    /// Loudness on a speech-friendly scale: -55 dB (a quiet room) is 0, -10 dB is 1.
+    static func level(rms: Float) -> Float {
+        let db = 20 * log10(max(rms, 1e-6))
+        return min(max((db + 55) / 45, 0), 1)
+    }
+
+    private func measure(_ buffer: AVAudioPCMBuffer) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastLevel >= 0.08, let samples = buffer.floatChannelData?[0],
+              buffer.frameLength > 0 else { return }
+        lastLevel = now
+        var sum: Float = 0
+        for i in 0..<Int(buffer.frameLength) { sum += samples[i] * samples[i] }
+        let level = Self.level(rms: (sum / Float(buffer.frameLength)).squareRoot())
+        Task { @MainActor [onLevel] in onLevel?(level) }
+    }
 
     private func send(_ buffer: AVAudioPCMBuffer, at when: AVAudioTime) {
         let (task, converter) = lock.withLock { (self.task, self.converter) }
@@ -178,14 +206,17 @@ final class ConversationStream: @unchecked Sendable {
             let type: String
             let start: Double?
             let end: Double?
+            let kept: Bool?
+            let languages: [String]?
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         guard let kind = try? decoder.decode(Kind.self, from: data) else { return nil }
         switch kind.type {
-        case "ready": return .ready
+        case "ready": return .ready(languages: kind.languages ?? [])
         case "speech": return kind.start.map { .speech(at: $0) }
-        case "silence": return kind.end.map { .silence(at: $0) }
+        case "silence": return kind.end.map { .silence(at: $0, kept: kind.kept ?? true) }
+        case "unheard": return .unheard
         case "utterance": return (try? decoder.decode(Utterance.self, from: data)).map { .utterance($0) }
         default: return nil
         }

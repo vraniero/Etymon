@@ -19,6 +19,33 @@ final class ConversationTests: XCTestCase {
         }
         XCTAssertEqual(at, 1.5)
         XCTAssertNil(ConversationStream.event(from: Data("{}".utf8)))
+        XCTAssertNil(u.detected)
+    }
+
+    func testDecodesWhatListeningIsDoing() {
+        guard case .ready(let languages) = ConversationStream.event(
+            from: Data(#"{"type":"ready","languages":["en","it"]}"#.utf8)) else { return XCTFail("not ready") }
+        XCTAssertEqual(languages, ["en", "it"])
+        guard case .silence(_, let kept) = ConversationStream.event(
+            from: Data(#"{"type":"silence","end":2,"kept":false}"#.utf8)) else { return XCTFail("not silence") }
+        XCTAssertFalse(kept)
+        guard case .unheard = ConversationStream.event(
+            from: Data(#"{"type":"unheard","start":1,"end":2}"#.utf8)) else { return XCTFail("not unheard") }
+        let foreign = #"""
+        {"type": "utterance", "id": 1, "persona": "P1", "new_persona": true, "similarity": 0,
+         "lang": null, "detected": "ja", "start": 0, "end": 1, "text": "konnichiwa", "words": []}
+        """#
+        guard case .utterance(let u) = ConversationStream.event(from: Data(foreign.utf8)) else {
+            return XCTFail("not an utterance")
+        }
+        XCTAssertNil(u.lang)
+        XCTAssertEqual(u.detected, "ja")
+    }
+
+    func testMicrophoneLevelScale() {
+        XCTAssertEqual(ConversationStream.level(rms: 0), 0)
+        XCTAssertEqual(ConversationStream.level(rms: 1), 1)
+        XCTAssertEqual(ConversationStream.level(rms: 0.01), 0.333, accuracy: 0.01)  // -40 dB
     }
 
     func testListenURLFollowsTheServer() {
@@ -164,6 +191,60 @@ final class TalkTests: XCTestCase {
         talk.clear()
         XCTAssertTrue(talk.isEmpty)
         XCTAssertNil(talk.lastConnection)
+    }
+
+    func testTheConnectionBannerFades() async {
+        let talk = makeSession()
+        await talk.heard(text: "padre", lang: "it", voice: "P1")
+        await talk.heard(text: "father", lang: "en", voice: "P2")
+        XCTAssertNotNil(talk.lastConnection)
+        try? await Task.sleep(for: .seconds(TalkSession.connectionSeconds + 0.5))
+        XCTAssertNil(talk.lastConnection)
+    }
+
+    func testTheCaptionShowsWhoSpokeThenFades() async {
+        let talk = makeSession()
+        await talk.heard(text: "padre", lang: "it", voice: "P1")
+        XCTAssertEqual(talk.caption?.speaker, 1)
+        XCTAssertEqual(talk.caption?.text, "padre")
+        XCTAssertEqual(TalkSession.captionSeconds("padre"), 4, accuracy: 0.2)
+        XCTAssertEqual(TalkSession.captionSeconds(String(repeating: "a", count: 1000)), 8)
+        try? await Task.sleep(for: .seconds(4.5))
+        XCTAssertNil(talk.caption)
+    }
+
+    func testEachWordSaidIsMarkedFoundOrMissing() async {
+        let talk = makeSession()
+        await talk.heard(text: "padre zzyzx", lang: "it", voice: "P1")
+        XCTAssertEqual(talk.caption?.words["padre"], .found)
+        XCTAssertEqual(talk.caption?.words["zzyzx"], .missing)
+        XCTAssertEqual(talk.caption?.detected, "it")
+        XCTAssertEqual(talk.wordsHeard, 2)
+        XCTAssertEqual(talk.wordsFound, 1)
+        XCTAssertEqual(talk.wordsPerMinute, 2)
+        // said again: known at once, no new lookup
+        await talk.heard(text: "padre", lang: "it", voice: "P2")
+        XCTAssertEqual(talk.caption?.words["padre"], .found)
+        XCTAssertEqual(talk.wordsFound, 2)
+    }
+
+    func testConnectTakesEveryWordOrTheChosenSpeakers() async {
+        let talk = makeSession()
+        await talk.heard(text: "padre notte", lang: "it", voice: "P1")
+        await talk.heard(text: "father", lang: "en", voice: "P2")
+        XCTAssertEqual(talk.connectWords.map(\.text), ["padre", "notte", "father"])
+        talk.connectSpeakers = [2]
+        XCTAssertEqual(talk.connectWords.map(\.text), ["father"])
+        XCTAssertEqual(talk.connectWords.map(\.lang), ["en"])
+    }
+
+    func testThePhaseFollowsTheListening() {
+        let talk = makeSession()
+        XCTAssertEqual(talk.phase, .off)
+        talk.handle(.speech(at: 0))
+        talk.handle(.silence(at: 1, kept: true))
+        talk.handle(.unheard)
+        XCTAssertEqual(talk.notice, "Heard a sound — no words in it")
     }
 
     func testAWordSaidAgainTakesTheNewSpeakersColour() async {

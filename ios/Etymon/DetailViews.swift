@@ -89,6 +89,7 @@ struct WordDetail: View {
 struct SettingsView: View {
     @AppStorage(APIClient.baseURLKey) private var baseURL = APIClient.defaultBaseURL
     @AppStorage(SearchDepth.storageKey) private var depth = SearchDepth.defaultValue
+    @AppStorage(TreeDepth.storageKey) private var treeDepth = TreeDepth.defaultValue
     @AppStorage(WordLimit.storageKey) private var maxWords = WordLimit.defaultValue
     @Environment(\.dismiss) private var dismiss
 
@@ -127,6 +128,20 @@ struct SettingsView: View {
                 }
                 SavedSettingsSection()
                 Section {
+                    Picker("Steps between", selection: $treeDepth) {
+                        ForEach(TreeDepth.choices, id: \.self) { Text(TreeDepth.title($0)).tag($0) }
+                        Text(TreeDepth.title(TreeDepth.all)).tag(TreeDepth.all)
+                    }
+                    .accessibilityIdentifier("treeDepthSetting")
+                } header: {
+                    Text("Trees")
+                } footer: {
+                    Text("Words and their roots are always drawn; this sets how many of the steps "
+                         + "between them are shown in Explore, Talk and AR. Fewer keeps the network "
+                         + "readable: a line then jumps from the last step shown straight to the root, "
+                         + "thin, with the number of steps it skips. Also in the menu over those views.")
+                }
+                Section {
                     SearchDepthStepper()
                     Button("Reset to \(SearchDepth.defaultValue.formatted())") {
                         depth = SearchDepth.defaultValue
@@ -143,6 +158,42 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .toolbar { Button("Done") { dismiss() } }
         }
+    }
+}
+
+/// How many steps between words and roots to draw (Explore, Talk, AR): a menu.
+struct TreeDepthMenu: View {
+    @AppStorage(TreeDepth.storageKey) private var depth = TreeDepth.defaultValue
+
+    var body: some View {
+        Menu {
+            Picker("Steps between words and roots", selection: $depth) {
+                ForEach(TreeDepth.choices, id: \.self) { Text(TreeDepth.title($0)).tag($0) }
+                Text(TreeDepth.title(TreeDepth.all)).tag(TreeDepth.all)
+            }
+        } label: {
+            Label(TreeDepth.short(depth), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                .monospacedDigit()
+        }
+        .accessibilityLabel("Steps between words and roots: \(TreeDepth.title(depth))")
+        .accessibilityIdentifier("treeDepth")
+    }
+}
+
+/// Whole network or only the connecting paths (Explore, Talk): a menu.
+struct ExploreScopeMenu: View {
+    @AppStorage(ExploreScope.storageKey) private var scope: ExploreScope = .whole
+
+    var body: some View {
+        Menu {
+            Picker("Show", selection: $scope) {
+                ForEach(ExploreScope.allCases) { Text($0.title).tag($0) }
+            }
+        } label: {
+            Label(scope.short, systemImage: scope == .whole ? "circle.hexagongrid" : "link")
+        }
+        .accessibilityLabel("Show: \(scope.title)")
+        .accessibilityIdentifier("exploreScope")
     }
 }
 

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     enum Source: String, CaseIterable, Identifiable {
-        case camera = "Camera", ar = "AR", photo = "Photo", type = "Type"
+        case camera = "Camera", ar = "AR", photo = "Photo", type = "Type", talk = "Talk"
         var id: String { rawValue }
         /// One live mode: AR where the phone has world tracking; Camera (the network drawn
         /// flat over the video) only as the fallback where it hasn't.
@@ -32,6 +32,9 @@ struct ContentView: View {
     }
 
     @State private var model = SceneModel()
+    @State private var talk = TalkSession()  // kept while other tabs are used
+    @State private var confirmStartOver = false
+    @State private var saving = false
     @State private var source: Source = LaunchOptions.source.flatMap { Source.available.contains($0) ? $0 : nil }
         ?? (Source.available.first { $0.isLive } ?? .type)
     @State private var selection: Selection?
@@ -72,6 +75,8 @@ struct ContentView: View {
                     status
                     if model.response != nil { layersPicker }
                     graph
+                case .talk:
+                    TalkView(session: talk, saving: saving, onSave: save)
                 }
             }
             .navigationTitle("Etymon")
@@ -80,8 +85,17 @@ struct ContentView: View {
             .onChange(of: maxWords) { model.applyWordLimit() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Clear", systemImage: "trash") { model.reset() }
-                        .disabled(model.words.isEmpty)
+                    Button("Start over", systemImage: "trash") { confirmStartOver = true }
+                        .disabled(source == .talk ? talk.isEmpty : model.words.isEmpty)
+                        .accessibilityIdentifier("startOver")
+                        .confirmationDialog("Start a new scene?", isPresented: $confirmStartOver,
+                                            titleVisibility: .visible) {
+                            Button("Save to library…") { save() }
+                            Button("Discard and start over", role: .destructive) { startOver() }
+                        } message: {
+                            Text("The words and network so far go away. Save them to your library "
+                                 + "to keep them — saved scenes work offline.")
+                        }
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button("My network", systemImage: "books.vertical") { showLibrary = true }
@@ -211,8 +225,28 @@ struct ContentView: View {
         selection = Selection.of(key, in: response)
     }
 
-    /// Keep the scene as it is now: the save sheet asks what it was on.
+    private func startOver() {
+        if source == .talk { talk.clear() } else { model.reset() }
+    }
+
+    /// Keep the scene as it is now: the save sheet asks what it was on. A conversation is
+    /// saved as the network of everything said.
     private func save() {
+        if source == .talk {
+            guard !talk.isEmpty, !saving else { return }
+            saving = true
+            Task {
+                defer { saving = false }
+                do {
+                    let response = try await talk.sceneForSaving()
+                    draft = SceneDraft(source: Source.talk.rawValue, response: response, language: nil,
+                                       picture: nil, object: "Conversation", note: talk.speakersSummary)
+                } catch {
+                    talk.report("Couldn't save: \(error.localizedDescription)")
+                }
+            }
+            return
+        }
         guard let response = model.response, !response.words.isEmpty else { return }
         draft = SceneDraft(source: source.rawValue, response: response, language: model.language,
                            picture: source.showsGraphInline ? nil : model.picture)

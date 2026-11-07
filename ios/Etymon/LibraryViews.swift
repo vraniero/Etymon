@@ -9,6 +9,9 @@ struct SceneDraft: Identifiable {
     let response: SceneResponse
     let language: String?
     let picture: ScenePicture?
+    /// Suggested name and note (Talk: "Conversation", who spoke).
+    var object = ""
+    var note = ""
 }
 
 // MARK: - Save
@@ -100,6 +103,8 @@ struct SaveSceneView: View {
     }
 
     private func prepare() async {
+        if object.isEmpty { object = draft.object }
+        if note.isEmpty { note = draft.note }
         if rememberPlace { Task { await locate() } }
         guard let picture = draft.picture else { return }
         let rendered = await Task.detached(priority: .userInitiated) {
@@ -335,7 +340,7 @@ struct SceneThumbnail: View {
 
     static func symbol(for source: String) -> String {
         switch source {
-        case "Listen": return "waveform"
+        case "Talk", "Listen": return "bubble.left.and.text.bubble.right"
         case "Type": return "character.cursor.ibeam"
         default: return "text.viewfinder"
         }

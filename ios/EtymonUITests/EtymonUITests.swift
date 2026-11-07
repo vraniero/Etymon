@@ -177,6 +177,13 @@ final class EtymonUITests: XCTestCase {
         shot("14-explore-panel-collapsed")
         handle.tap()
         XCTAssertTrue(list.waitForExistence(timeout: 3), "tapping the handle opens it again")
+        // and back: Collapse takes away what Expand brought in
+        let collapse = app.buttons["collapseNode"]
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5))
+        collapse.tap()
+        XCTAssertTrue(app.buttons["jump-Pater"].waitForNonExistence(timeout: 5),
+                      "collapsing pater takes its descendants away again")
+        XCTAssertTrue(app.buttons["expandNode"].waitForExistence(timeout: 5))
 
         app.buttons["closeExplore"].tap()
         XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))

@@ -7,7 +7,17 @@ import SwiftUI
 /// node to move it; Expand brings in where it comes from and what came from it.
 struct ExploreView: View {
     let graph: ExploreGraph
-    var onClose: () -> Void
+    /// Talk shows the same space, growing: its own title, no Back, the camera following.
+    var title = "Explore"
+    var follow = false
+    var emptyHint = "Tap a word to explore it — or start from one seen in the scene:"
+    /// Talk: only these speakers' words (and their trees); empty shows everyone.
+    var speakers: Set<Int> = []
+    /// Talk has its own controls (and counts) where the header would be.
+    var showsHeader = true
+    var onClose: (() -> Void)?
+    @AppStorage(TreeDepth.storageKey) private var treeDepth = TreeDepth.defaultValue
+    @AppStorage(ExploreScope.storageKey) private var scope: ExploreScope = .whole
 
     @State private var selected: Int?
     @State private var expanding: Int?
@@ -34,12 +44,14 @@ struct ExploreView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
-                NetworkScene(graph: graph, version: graph.version, selected: $selected)
+                NetworkScene(graph: graph, version: graph.version, depth: treeDepth, speakers: speakers,
+                             scope: scope,
+                             follow: follow, selected: $selected)
                     .ignoresSafeArea()
                     .accessibilityIdentifier("explore3D")
 
                 VStack(spacing: 0) {
-                    header
+                    if showsHeader { header }
                     Spacer(minLength: 0)
                     panel(screen: geo.size.height)
                 }
@@ -47,6 +59,10 @@ struct ExploreView: View {
         }
         .background(Color(red: 0.05, green: 0.06, blue: 0.1))
         .environment(\.colorScheme, .dark)
+        .onAppear {
+            // Talk: the space first, the panel when a word is picked
+            if follow { detent = .collapsed }
+        }
         .onChange(of: selected) { _, id in
             // picking a word in the tree brings its details up
             if id != nil, detent == .collapsed { withAnimation(.snappy) { detent = .peek } }
@@ -59,16 +75,25 @@ struct ExploreView: View {
 
     private var header: some View {
         HStack {
-            Button(action: onClose) {
-                Label("Back", systemImage: "chevron.left")
+            if let onClose {
+                Button(action: onClose) {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("closeExplore")
             }
-            .buttonStyle(.borderedProminent)
-            .accessibilityIdentifier("closeExplore")
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("Explore").font(.headline)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(title).font(.headline)
                 Text("\(graph.nodes.count) words · \(graph.edges.count) links")
                     .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    ExploreScopeMenu()
+                    TreeDepthMenu()
+                }
+                .font(.caption.bold())
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
         .foregroundStyle(.white)
@@ -162,14 +187,15 @@ struct ExploreView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button { selected = nil } label: { Image(systemName: "xmark.circle.fill") }
-                    .foregroundStyle(.secondary)
+                Button("Show all", systemImage: "circle.hexagongrid") { selected = nil }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .accessibilityIdentifier("exploreShowAll")
             }
             if detent != .collapsed {
                 actions(node)
             }
         } else {
-            Text("Tap a word to explore it — or start from one seen in the scene:")
+            Text(emptyHint)
                 .font(.subheadline)
         }
         if let error {
@@ -183,7 +209,7 @@ struct ExploreView: View {
             details(node)
         } else {
             chips(graph.sceneWords.compactMap { graph.nodes[$0] }.map { ($0, nil) })
-            Text("Drag to turn · pinch to zoom · press and hold a word to move it · "
+            Text("Drag to turn · two fingers to move · pinch to zoom · press and hold a word to move it · "
                  + "drag the handle to resize this panel")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -192,17 +218,20 @@ struct ExploreView: View {
     private func actions(_ node: ExploreGraph.XNode) -> some View {
         HStack {
             Button {
-                Task { await expand(node.id) }
+                if node.expanded { graph.collapse(node.id) } else { Task { await expand(node.id) } }
             } label: {
                 if expanding == node.id {
                     ProgressView().controlSize(.small)
+                } else if node.expanded {
+                    Label("Collapse", systemImage: "arrow.down.right.and.arrow.up.left")
                 } else {
-                    Label(node.expanded ? "Expanded" : "Expand", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                    Label("Expand", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(node.expanded || expanding != nil)
-            .accessibilityIdentifier("expandNode")
+            .tint(node.expanded ? .gray : .accentColor)
+            .disabled(expanding != nil)
+            .accessibilityIdentifier(node.expanded ? "collapseNode" : "expandNode")
             Button("Lineage", systemImage: "list.bullet.indent") { lineage = node }
                 .buttonStyle(.bordered)
             Spacer(minLength: 0)
@@ -263,7 +292,7 @@ struct ExploreView: View {
                     }
                     .font(.subheadline)
                     .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Capsule().fill(NetworkScene.color(for: node.role).opacity(0.85)))
+                    .background(Capsule().fill(Color(NetworkScene.color(for: node, in: graph)).opacity(0.85)))
                     .foregroundStyle(.black)
                 }
                 .accessibilityIdentifier("jump-\(node.label)")
@@ -285,7 +314,7 @@ struct ExploreView: View {
 
     private func role(_ node: ExploreGraph.XNode) -> String? {
         switch node.role {
-        case .scene: return "seen in the scene"
+        case .scene: return graph.speakers[node.id].map { "said by Speaker \($0)" } ?? "seen in the scene"
         case .meeting: return "shared root"
         case .ancestor: return nil
         case .expanded: return nil
@@ -313,7 +342,32 @@ extension ExploreGraph.XNode: Equatable {
 struct NetworkScene: UIViewRepresentable {
     let graph: ExploreGraph
     let version: Int  // structural changes trigger updateUIView
+    /// Steps drawn between words and roots (TreeDepth), and whose words (Talk; empty: all).
+    var depth = TreeDepth.all
+    var speakers: Set<Int> = []
+    /// The whole network, or only the paths that connect words.
+    var scope = ExploreScope.whole
+    /// Keep the whole network in view as it grows (until the user picks a word).
+    var follow = false
     @Binding var selected: Int?
+
+    /// A node's colour: a spoken word takes its speaker's.
+    static func color(for node: ExploreGraph.XNode, in graph: ExploreGraph) -> UIColor {
+        if node.role == .scene, let speaker = graph.speakers[node.id] {
+            return speakerColor(speaker)
+        }
+        return UIColor(color(for: node.role))
+    }
+
+    static let speakerPalette: [UIColor] = [
+        UIColor(red: 1.0, green: 0.45, blue: 0.62, alpha: 1), UIColor(red: 0.35, green: 0.85, blue: 0.9, alpha: 1),
+        UIColor(red: 1.0, green: 0.62, blue: 0.3, alpha: 1), UIColor(red: 0.72, green: 0.55, blue: 1.0, alpha: 1),
+        UIColor(red: 0.5, green: 0.9, blue: 0.55, alpha: 1), UIColor(red: 0.55, green: 0.7, blue: 1.0, alpha: 1),
+    ]
+
+    static func speakerColor(_ number: Int) -> UIColor {
+        speakerPalette[(max(number, 1) - 1) % speakerPalette.count]
+    }
 
     static func color(for role: ExploreGraph.Role) -> Color {
         switch role {
@@ -341,7 +395,13 @@ struct NetworkScene: UIViewRepresentable {
             target: context.coordinator, action: #selector(Coordinator.hold(_:)))
         hold.minimumPressDuration = 0.3
         view.addGestureRecognizer(hold)
-        context.coordinator.sync(graph)
+        // two fingers slide the view (pinch still zooms, one finger still turns)
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
+        pan.minimumNumberOfTouches = 2
+        pan.maximumNumberOfTouches = 2
+        pan.delegate = context.coordinator
+        view.addGestureRecognizer(pan)
+        context.coordinator.sync(graph, depth: depth, speakers: speakers, scope: scope)
         context.coordinator.frameAll()
         context.coordinator.start()
         return view
@@ -349,7 +409,8 @@ struct NetworkScene: UIViewRepresentable {
 
     func updateUIView(_ view: SCNView, context: Context) {
         context.coordinator.selectedBinding = $selected
-        context.coordinator.sync(graph)
+        context.coordinator.follow = follow && selected == nil
+        context.coordinator.sync(graph, depth: depth, speakers: speakers, scope: scope)
         context.coordinator.select(selected)
     }
 
@@ -358,7 +419,7 @@ struct NetworkScene: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let scene = SCNScene()
         let camera = SCNNode()
         weak var view: SCNView?
@@ -367,8 +428,11 @@ struct NetworkScene: UIViewRepresentable {
         private let layout = ForceLayout()
         private var graph: ExploreGraph?
         private var nodeObjects: [Int: SCNNode] = [:]
+        private var nodeStyles: [Int: String] = [:]  // role and colour each was drawn with
+        private var skipLabels: [ExploreGraph.XEdge: SCNNode] = [:]  // "+3" on shortcuts
+        var follow = false
         private var edgeObjects: [ExploreGraph.XEdge: SCNNode] = [:]
-        private var syncedVersion = -1
+        private var syncedKey = ""
         private var currentSelection: Int?
         private var link: CADisplayLink?
         private var settleFrames = 0
@@ -403,33 +467,76 @@ struct NetworkScene: UIViewRepresentable {
 
         // MARK: structure
 
-        func sync(_ graph: ExploreGraph) {
+        func sync(_ full: ExploreGraph, depth: Int, speakers: Set<Int>, scope: ExploreScope) {
+            let focus = selectedBinding.wrappedValue
+            let key = "\(ObjectIdentifier(full))|\(full.version)|\(depth)|\(speakers.sorted())|\(focus ?? -1)|\(scope.rawValue)"
+            guard key != syncedKey else { return }
+            syncedKey = key
+            // what is drawn: the network cut to the steps and speakers asked for, and to the
+            // picked word's tree
+            let graph = full.shown(depth: depth, speakers: speakers, focus: focus, scope: scope)
             self.graph = graph
-            guard graph.version != syncedVersion else { return }
-            syncedVersion = graph.version
             layout.sync(graph)
-            for (id, node) in graph.nodes where nodeObjects[id] == nil {
+            for (id, object) in nodeObjects where graph.nodes[id] == nil {
+                object.removeFromParentNode()
+                nodeObjects[id] = nil
+                nodeStyles[id] = nil
+                if id == currentSelection { currentSelection = nil }
+            }
+            for (e, object) in edgeObjects where !graph.edges.contains(e) {
+                object.removeFromParentNode()
+                edgeObjects[e] = nil
+                skipLabels[e]?.removeFromParentNode()
+                skipLabels[e] = nil
+            }
+            let grew = graph.nodes.count != nodeObjects.count
+            for (id, node) in graph.nodes {
+                // new, or restyled: an ancestor became a shared root, a word changed speaker
+                let style = "\(node.role)|\(graph.speakers[id] ?? 0)"
+                guard nodeStyles[id] != style else { continue }
+                let old = nodeObjects[id]
+                old?.removeFromParentNode()
                 let object = makeNode(node)
+                if let old { object.simdPosition = old.simdPosition }
+                if node.role == .meeting, old != nil { Self.pulse(object) }
                 nodeObjects[id] = object
+                nodeStyles[id] = style
                 scene.rootNode.addChildNode(object)
+                if id == currentSelection { currentSelection = nil }
             }
             for e in graph.edges where edgeObjects[e] == nil {
                 let object = makeEdge(e)
                 edgeObjects[e] = object
                 scene.rootNode.addChildNode(object)
+                if e.skipped > 0 {
+                    let label = Self.skipLabel(e.skipped)
+                    skipLabels[e] = label
+                    scene.rootNode.addChildNode(label)
+                }
             }
             settleFrames = 240
             updatePositions()
+            if follow, grew, !userMoved { frameAll(settle: false, animated: true) }
+        }
+
+        /// A new shared root swells and settles, so it catches the eye.
+        private static func pulse(_ object: SCNNode) {
+            let up = SCNAction.scale(to: 2.2, duration: 0.25)
+            up.timingMode = .easeOut
+            let down = SCNAction.scale(to: 1, duration: 0.6)
+            down.timingMode = .easeInEaseOut
+            object.runAction(.sequence([up, down]))
         }
 
         private func makeNode(_ node: ExploreGraph.XNode) -> SCNNode {
             let radius: CGFloat = node.role == .scene ? 0.24 : node.role == .meeting ? 0.22 : 0.15
             let sphere = SCNSphere(radius: radius)
-            sphere.firstMaterial?.diffuse.contents = UIColor(NetworkScene.color(for: node.role))
+            let color = graph.map { NetworkScene.color(for: node, in: $0) } ?? UIColor(NetworkScene.color(for: node.role))
+            sphere.firstMaterial?.diffuse.contents = color
             sphere.firstMaterial?.emission.contents = UIColor.black
             let object = SCNNode(geometry: sphere)
             object.name = "n\(node.id)"
-            let label = SCNNode(geometry: Self.labelPlane(node))
+            let label = SCNNode(geometry: Self.labelPlane(node, fill: color))
             label.name = "n\(node.id)"
             label.position = SCNVector3(0, Float(radius) + 0.25, 0)
             label.constraints = [SCNBillboardConstraint()]
@@ -438,6 +545,15 @@ struct NetworkScene: UIViewRepresentable {
         }
 
         private func makeEdge(_ e: ExploreGraph.XEdge) -> SCNNode {
+            if e.skipped > 0 {
+                // hidden steps: a thin, faint line straight on to the root
+                let cylinder = SCNCylinder(radius: 0.018, height: 1)
+                cylinder.firstMaterial?.diffuse.contents = UIColor(white: 1, alpha: 1)
+                cylinder.firstMaterial?.emission.contents = UIColor(white: 1, alpha: 0.3)
+                let object = SCNNode(geometry: cylinder)
+                object.opacity = 0.35
+                return object
+            }
             let cylinder = SCNCylinder(radius: e.isMeaning ? 0.035 : 0.045, height: 1)
             let color: UIColor = e.isMeaning ? .systemGreen
                 : e.kind == "borrowed" || e.kind == "learned" || e.kind == "calque" ? .systemOrange
@@ -449,11 +565,30 @@ struct NetworkScene: UIViewRepresentable {
             return object
         }
 
+        /// "+3 steps": how many steps a shortcut leaves out, at its middle.
+        private static func skipLabel(_ count: Int) -> SCNNode {
+            let text = (count == 1 ? "+1 step" : "+\(count) steps") as NSString
+            let font = UIFont.systemFont(ofSize: 22, weight: .semibold)
+            let size = text.size(withAttributes: [.font: font])
+            let pill = CGSize(width: size.width + 18, height: size.height + 6)
+            let image = UIGraphicsImageRenderer(size: pill).image { _ in
+                UIColor(white: 0.25, alpha: 0.85).setFill()
+                UIBezierPath(roundedRect: CGRect(origin: .zero, size: pill), cornerRadius: pill.height / 2).fill()
+                text.draw(at: CGPoint(x: 9, y: 3), withAttributes: [.font: font, .foregroundColor: UIColor.white])
+            }
+            let plane = SCNPlane(width: pill.width / 170, height: pill.height / 170)
+            plane.firstMaterial?.diffuse.contents = image
+            plane.firstMaterial?.lightingModel = .constant
+            plane.firstMaterial?.isDoubleSided = true
+            let node = SCNNode(geometry: plane)
+            node.constraints = [SCNBillboardConstraint()]
+            return node
+        }
+
         /// A word and its language on a plane that faces the camera.
-        private static func labelPlane(_ node: ExploreGraph.XNode) -> SCNPlane {
+        private static func labelPlane(_ node: ExploreGraph.XNode, fill: UIColor) -> SCNPlane {
             SceneLabel.plane(word: node.label, language: node.language,
-                             reconstructed: node.reconstructed,
-                             fill: UIColor(NetworkScene.color(for: node.role)), pointsPerUnit: 170)
+                             reconstructed: node.reconstructed, fill: fill, pointsPerUnit: 170)
         }
 
         // MARK: motion
@@ -486,6 +621,7 @@ struct NetworkScene: UIViewRepresentable {
                 let d = b - a
                 let len = simd_length(d)
                 object.simdPosition = (a + b) / 2
+                skipLabels[e]?.simdPosition = (a + b) / 2
                 (object.geometry as? SCNCylinder)?.height = CGFloat(len)
                 if len > 0.0001 {
                     // a cylinder runs along y: rotate y onto the link's direction
@@ -497,15 +633,26 @@ struct NetworkScene: UIViewRepresentable {
         // MARK: camera
 
         /// Camera far enough back to see the whole network.
-        func frameAll() {
+        func frameAll(settle: Bool = true, animated: Bool = false) {
             guard let graph else { return }
-            for _ in 0..<200 { layout.step(graph) }  // start from a settled layout
-            updatePositions()
+            if settle {
+                for _ in 0..<200 { layout.step(graph) }  // start from a settled layout
+                updatePositions()
+            }
             let ids = Array(graph.nodes.keys)
             let center = layout.center(of: ids)
-            let radius = ids.compactMap { layout.positions[$0] }.map { simd_length($0 - center) }.max() ?? 5
+            // most of the network, not its farthest stray: a node or two far off (a loop in
+            // the data, a long climb) shouldn't shrink everything else to dots
+            let distances = ids.compactMap { layout.positions[$0] }.map { simd_length($0 - center) }.sorted()
+            let radius = distances.isEmpty ? 5 : distances[min(distances.count - 1, Int(Float(distances.count) * 0.9))]
+            if animated {
+                SCNTransaction.begin()
+                SCNTransaction.animationDuration = 1.2
+                SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            }
             camera.simdPosition = center + SIMD3(0, radius * 0.3, max(radius * 2.4, 10))
             camera.simdLook(at: center)
+            if animated { SCNTransaction.commit() }
             view?.defaultCameraController.target = SCNVector3(center)
         }
 
@@ -530,14 +677,43 @@ struct NetworkScene: UIViewRepresentable {
                 object.geometry?.firstMaterial?.emission.contents = UIColor.black
                 object.scale = SCNVector3(1, 1, 1)
             }
+            let hadSelection = currentSelection != nil
             currentSelection = id
-            guard let id, let object = nodeObjects[id] else { return }
+            guard let id, let object = nodeObjects[id] else {
+                // back to the whole network: step back to see all of it
+                if id == nil, hadSelection { frameAll(settle: false, animated: true) }
+                return
+            }
             object.geometry?.firstMaterial?.emission.contents = UIColor(white: 0.6, alpha: 1)
             object.scale = SCNVector3(1.5, 1.5, 1.5)
             focus(on: id)
         }
 
         // MARK: gestures
+
+        /// Set once the user slides the view: growing networks stop re-framing it.
+        private var userMoved = false
+
+        /// Two-finger drag: the camera and the point it turns around slide together, sideways
+        /// and up or down on screen, as far as the fingers moved at the depth of that point.
+        @objc func pan(_ gesture: UIPanGestureRecognizer) {
+            guard let view, let pov = view.pointOfView else { return }
+            let t = gesture.translation(in: view)
+            gesture.setTranslation(.zero, in: view)
+            let target = SIMD3<Float>(view.defaultCameraController.target)
+            let distance = max(simd_distance(pov.simdWorldPosition, target), 1)
+            let fov = Float(pov.camera?.fieldOfView ?? 60) * .pi / 180
+            let perPoint = 2 * distance * tan(fov / 2) / Float(max(view.bounds.height, 1))
+            let delta = (-pov.simdWorldRight * Float(t.x) + pov.simdWorldUp * Float(t.y)) * perPoint
+            pov.simdWorldPosition += delta
+            view.defaultCameraController.target = SCNVector3(target + delta)
+            userMoved = true
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            g is UIPanGestureRecognizer && other is UIPinchGestureRecognizer
+        }
 
         private func nodeID(at point: CGPoint) -> Int? {
             guard let view else { return nil }

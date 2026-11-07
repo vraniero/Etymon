@@ -172,6 +172,7 @@ struct ARNetworkLayout {
 
     private(set) var words: [Int: Word] = [:]
     private(set) var roots: [Root] = []
+
     private(set) var arcs: [Arc] = []
 
     /// What is shown and where, to the millimetre: equal signatures draw the same picture,
@@ -268,7 +269,10 @@ struct ARBranchLayout {
     /// Half a card's height at 1 m: lines end at the card's edge, not its middle.
     static let cardHalf: Float = 0.035
 
-    init?(meet: Int, response: SceneResponse, layout: ARNetworkLayout) {
+    /// `middle`: how many of the steps between each word and the root are drawn, and of
+    /// those between the root and the oldest ancestor above it (TreeDepth; `all`: every one).
+    /// The ones nearest the word (the root) stay; a faint segment jumps over the rest.
+    init?(meet: Int, response: SceneResponse, layout: ARNetworkLayout, middle: Int = TreeDepth.all) {
         guard let root = layout.roots.first(where: { $0.node == meet }) else { return nil }
         self.meet = meet
         let s = root.scale
@@ -282,7 +286,10 @@ struct ARBranchLayout {
             paths.append((i, c.a == i ? c.pathA : c.pathB))
         }
         words = paths.map(\.word)
-        let longest = paths.map { max($0.steps.count - 2, 0) }.max() ?? 0
+        func kept(_ steps: ArraySlice<Step>) -> (shown: [Step], skipped: Int) {
+            middle == TreeDepth.all ? (Array(steps), 0) : (Array(steps.prefix(middle)), max(steps.count - middle, 0))
+        }
+        let longest = paths.map { kept($0.steps.dropFirst().dropLast()).shown.count }.max() ?? 0
         let top = root.position + up * (Self.step * s * Float(longest))
         rootPosition = top
 
@@ -295,7 +302,7 @@ struct ARBranchLayout {
         for (i, steps) in paths {
             guard let word = layout.words[i] else { continue }
             // steps run from the word's own term up to the root; in between, the ancestors
-            let between = Array(steps.dropFirst().dropLast())
+            let (between, skipped) = kept(steps.dropFirst().dropLast())
             var previous = (key: "w\(i)", position: word.position, isCard: false)
             for (k, step) in between.enumerated() where step.node != meet {
                 let position: SIMD3<Float>
@@ -314,18 +321,27 @@ struct ARBranchLayout {
             }
             link("\(previous.key)>\(meet)",
                  previous.position + (previous.isCard ? up * Self.cardHalf * s : .zero),
-                 top - up * Self.cardHalf * s, steps.count > 1 ? steps.last?.kind : nil)
+                 top - up * Self.cardHalf * s, skipped > 0 ? "skip" : steps.count > 1 ? steps.last?.kind : nil)
         }
 
         // the root's own ancestry, older and higher
         var below = (key: "\(meet)", position: top)
+        // the oldest ancestor always shows; the steps up to it are thinned like the paths
         let deeper = response.connections.first { $0.meet == meet }?.deeper ?? []
-        for step in deeper where placed[step.node] == nil {
+        var above = deeper
+        var jump = 0
+        if let oldest = deeper.last, middle != TreeDepth.all {
+            let (shown, skipped) = kept(deeper.dropLast()[...])
+            above = shown + [oldest]
+            jump = skipped
+        }
+        for (k, step) in above.enumerated() where placed[step.node] == nil {
             let position = below.position + up * (Self.step * 1.25 * s)
             placed[step.node] = position
             cards.append(Card(node: step.node, position: position, scale: s))
+            let skip = jump > 0 && k == above.count - 1
             link("\(below.key)>\(step.node)", below.position + up * Self.cardHalf * s,
-                 position - up * Self.cardHalf * s, step.kind)
+                 position - up * Self.cardHalf * s, skip ? "skip" : step.kind)
             below = ("\(step.node)", position)
         }
     }

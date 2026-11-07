@@ -14,11 +14,12 @@ French *père*.
 - [x] **Backend API** — scene words in, shared roots and same-meaning links out (`backend/`)
 - [x] **iOS MVP** — camera / photo / typed text → text recognition → API → network drawn
   over the picture and live video, plus a graph view (`ios/`)
-- [x] **Conversation** — in AR, the microphone streams to the backend (`backend/listen.py`:
-  Whisper per utterance, speaker embeddings for voices); each voice is a persona placed on
-  the face whose mouth moves, a TV or speaker in view, or off camera, and the words it says
-  join the network in its colour (`ios/Etymon/Conversation.swift`, `SpeakerLocator.swift`).
-  Thresholds still to tune on real conversations
+- [x] **Talk** — a separate tab: a 3D space a conversation grows in real time. The
+  microphone streams to the backend (`backend/listen.py`: Whisper per utterance, speaker
+  embeddings to tell voices apart); each word said appears in its speaker's colour with its
+  tree of ancestors, and connects where trees meet or meanings match — with a chime
+  (sound can be turned off) (`ios/Etymon/TalkSession.swift`, `TalkView.swift`, `Chimes.swift`).
+  `-talkdemo` launch argument plays a scripted conversation (simulator, screenshots)
 - [ ] Field testing on a device (in progress on an iPhone)
 - [x] **AR mode** — words anchored where they are in the room, shared roots floating
   above them (`ios/Etymon/ARInput.swift`); needs a device with world tracking
@@ -89,7 +90,7 @@ python3 -m venv .venv
 .venv/bin/pip install fastapi uvicorn httpx pytest websockets
 ```
 
-For **Conversation** (listening in AR) add the speech models — Apple Silicon only; about
+For **Talk** (listening to conversations) add the speech models — Apple Silicon only; about
 2 GB on first use (Whisper large-v3-turbo, an ECAPA speaker model), downloaded the first
 time the phone starts listening:
 

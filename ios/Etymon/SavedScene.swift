@@ -9,7 +9,7 @@ import SwiftData
 final class SavedScene {
     var id: UUID
     var date: Date
-    /// Camera, AR, Photo, Listen or Type.
+    /// Camera, AR, Photo, Type or Talk.
     var source: String
     /// What the words were on, named by the user (suggested from the picture).
     var object: String

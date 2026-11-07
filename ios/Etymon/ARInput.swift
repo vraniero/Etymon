@@ -5,11 +5,6 @@ import SwiftUI
 /// AR: the words around you anchored where they are in the room, their shared roots
 /// floating above them. Walk around and the network stays put; words read from different
 /// walls and signs connect across the space.
-///
-/// With the microphone on, the people talking join in: each voice is a persona, found on
-/// the face whose mouth moves as it speaks (or a screen or speaker in view, or somewhere
-/// off camera), and the words it says float above it in its colour, linked to everything
-/// else in the scene as they are said.
 struct ARInput: View {
     let model: SceneModel
     let layers: NetworkLayers
@@ -17,7 +12,7 @@ struct ARInput: View {
     var onSelect: (GraphLayout.Key) -> Void
     var onExplore: () -> Void
     @State private var paused = false
-    @State private var conversation = Conversation()
+    @AppStorage(TreeDepth.storageKey) private var treeDepth = TreeDepth.defaultValue
     /// One branch picked out by tapping a line; nil shows the whole network.
     @State private var focus: ARFocus?
     /// False until the camera's first frame: until then a placeholder, not a black screen.
@@ -30,33 +25,25 @@ struct ARInput: View {
             ZStack(alignment: .bottomTrailing) {
                 ARNetworkView(response: model.response?.showing(layers),
                               sceneIsEmpty: model.words.isEmpty, reading: !paused && !exploring,
-                              running: !exploring, conversation: conversation,
-                              personas: conversation.personas, focus: $focus, ready: $cameraReady,
+                              running: !exploring, middleSteps: treeDepth, focus: $focus, ready: $cameraReady,
                               onSelect: onSelect) { read in
                     model.see(read.recognition, imageSize: read.imageSize, full: true,
                               picture: read.picture)
                 }
                 .accessibilityIdentifier("arView")
                 if !cameraReady { ARStarting().transition(.opacity) }
-                ConversationOverlay(conversation: conversation)
                 if focus != nil {
                     Button("Show all", systemImage: "point.3.filled.connected.trianglepath.dotted") {
                         focus = nil
                     }
                     .buttonStyle(.borderedProminent).tint(.orange)
-                    .padding(.top, 44)  // below the speakers' chips
+                    .padding(.top, 12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .accessibilityIdentifier("showAll")
                 }
                 HStack {
-                    Button(conversation.listening ? "Stop listening" : "Listen",
-                           systemImage: conversation.listening ? "mic.fill" : "mic.slash") {
-                        if conversation.listening { conversation.stop() } else { Task { await conversation.start() } }
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderedProminent)
-                    .tint(conversation.listening ? .red : .gray)
-                    .accessibilityIdentifier("listen")
+                    TreeDepthMenu()
+                        .buttonStyle(.borderedProminent).tint(.gray)
                     Button(paused ? "Collect" : "Hold", systemImage: paused ? "plus.viewfinder" : "pause.fill") {
                         paused.toggle()  // the network stays in place; no new words are read
                     }
@@ -69,14 +56,9 @@ struct ARInput: View {
                 .padding(12)
             }
             .clipped()
-            .onAppear {
-                conversation.onHeard = { [model] text, lang in model.hear(text, lang: lang) }
-            }
             .onChange(of: model.words.isEmpty) { _, empty in
-                if empty { conversation.clearWords(); focus = nil }
+                if empty { focus = nil }
             }
-            .onChange(of: exploring) { _, isExploring in if isExploring { conversation.stop() } }
-            .onDisappear { conversation.stop() }
         } else {
             ContentUnavailableView("No AR", systemImage: "arkit",
                                    description: Text("AR needs an iPhone with world tracking."))
@@ -95,9 +77,8 @@ struct ARNetworkView: UIViewRepresentable {
     let sceneIsEmpty: Bool
     let reading: Bool
     let running: Bool
-    let conversation: Conversation
-    /// Passed so the view updates when someone speaks or moves to another place.
-    let personas: [Conversation.Persona]
+    /// Steps drawn between words and roots in a picked branch (TreeDepth).
+    var middleSteps = TreeDepth.all
     @Binding var focus: ARFocus?
     @Binding var ready: Bool
     var onSelect: (GraphLayout.Key) -> Void
@@ -127,8 +108,8 @@ struct ARNetworkView: UIViewRepresentable {
         let c = context.coordinator
         c.onSelect = onSelect
         c.onRead = onRead
-        c.listen(to: conversation)
         c.reading = reading
+        c.middleSteps = middleSteps
         c.focusBinding = $focus
         c.readyBinding = $ready
         c.setFocus(focus)
@@ -172,6 +153,10 @@ struct ARNetworkView: UIViewRepresentable {
 
         /// The branch picked out by tapping a line, and the SwiftUI state it mirrors.
         private var focus: ARFocus?
+        /// Steps drawn between words and roots in a branch; a change redraws.
+        var middleSteps = TreeDepth.all {
+            didSet { if middleSteps != oldValue { render(animated: false) } }
+        }
         var focusBinding: Binding<ARFocus?> = .constant(nil)
         var readyBinding: Binding<Bool> = .constant(true)
         /// Whether the camera is showing, mirrored into `readyBinding` only when it changes.
@@ -194,7 +179,6 @@ struct ARNetworkView: UIViewRepresentable {
         private let glide: TimeInterval = 0.1
 
         private var wordObjects: [String: (signature: String, node: SCNNode)] = [:]
-        private var personaObjects: [String: (signature: String, node: SCNNode)] = [:]
         private var rootObjects: [Int: (signature: String, node: SCNNode)] = [:]
         private var linkObjects: [String: SCNNode] = [:]  // tubes, dashes, meaning labels
         private let links = SCNNode()
@@ -266,27 +250,7 @@ struct ARNetworkView: UIViewRepresentable {
             MainActor.assumeIsolated {
                 lastFrame = Date()
                 ready = true
-                // who is talking is watched even while the phone moves: faces don't blur like text
-                if let conversation, conversation.listening {
-                    conversation.locator.consider(frame, session: session)
-                }
                 consider(frame)
-            }
-        }
-
-        // MARK: conversation
-
-        private weak var conversation: Conversation?
-
-        func listen(to conversation: Conversation) {
-            guard self.conversation !== conversation else {
-                render(animated: true)  // someone spoke: their words and place
-                return
-            }
-            self.conversation = conversation
-            conversation.locator.onUpdate = { [weak self, weak conversation] in
-                // a face moved: its persona and words go with it
-                if conversation?.follow() == true { self?.render(animated: true) }
             }
         }
 
@@ -432,19 +396,12 @@ struct ARNetworkView: UIViewRepresentable {
         private func render(animated: Bool) {
             guard let view else { return }
             let root = view.scene.rootNode
-            let personas = conversation?.personas ?? []
-            var placed = anchors
-            if let conversation, let camera = lastCamera?.transform ?? view.session.currentFrame?.camera.transform {
-                // spoken words float by their speaker; a word also read in the room stays there
-                let scene = Set(response?.words.map(\.key) ?? [])
-                placed.merge(conversation.anchors(camera: camera, scene: scene)) { read, _ in read }
-            }
-            let layout = response.map { ARNetworkLayout(response: $0, anchors: placed) }
+            let layout = response.map { ARNetworkLayout(response: $0, anchors: anchors) }
 
             // a picked branch: only it is shown; one whose words left the scene lets go
             var branch: ARBranchLayout?
             if case .root(let meet) = focus, let response, let layout {
-                branch = ARBranchLayout(meet: meet, response: response, layout: layout)
+                branch = ARBranchLayout(meet: meet, response: response, layout: layout, middle: middleSteps)
             }
             let focusArc = layout?.arcs.first { focus == .meaning($0.id) }
             if focus != nil, branch == nil, focusArc == nil {
@@ -453,12 +410,9 @@ struct ARNetworkView: UIViewRepresentable {
             }
             let shownWords: Set<Int>? = branch.map { Set($0.words) } ?? focusArc.map { [$0.a, $0.b] }
 
-            let signature = "focus:\(String(describing: focus))|" + (layout?.signature ?? "")
+            let signature = "focus:\(String(describing: focus))|mid:\(middleSteps)|" + (layout?.signature ?? "")
                 + (response?.words.map { "\($0.text)|\($0.lang ?? "")|\($0.terms.first ?? 0)" }
                     .joined(separator: ";") ?? "")
-                + personas.map { "\($0.id)|\($0.title)|\($0.lang ?? "")|\($0.words.count)|"
-                    + "\(Int($0.position.x * 200)),\(Int($0.position.y * 200)),\(Int($0.position.z * 200))" }
-                    .joined(separator: ";")
             guard signature != drawn else { return }
             drawn = signature
 
@@ -476,14 +430,13 @@ struct ARNetworkView: UIViewRepresentable {
                 guard let response else { break }
                 let w = response.words[word.index]
                 let language = w.terms.first.flatMap { response.node($0)?.language } ?? w.lang ?? ""
-                let speaker = conversation?.persona(saying: word.key)
-                let signature = "\(w.text)|\(language)|\(word.linked)|\(speaker?.id ?? "")"
+                let signature = "\(w.text)|\(language)|\(word.linked)"
                 keepWords.insert(word.key)
                 if wordObjects[word.key]?.signature != signature {
                     let old = wordObjects[word.key]?.node
                     old?.removeFromParentNode()
                     let node = Self.wordNode(key: word.key, text: w.text, language: language,
-                                             linked: word.linked, speaker: speaker?.color)
+                                             linked: word.linked)
                     // a replaced card starts where the old one was and glides on from there
                     node.simdPosition = old?.simdPosition ?? word.position
                     node.simdScale = old?.simdScale ?? SIMD3(repeating: word.scale)
@@ -498,29 +451,6 @@ struct ARNetworkView: UIViewRepresentable {
             for (key, object) in wordObjects where !keepWords.contains(key) {
                 object.node.removeFromParentNode()
                 wordObjects[key] = nil
-            }
-
-            var keepPersonas = Set<String>()
-            for p in personas {
-                let label = "\(p.title)" + (p.lang.map { " · \(Self.languageName($0))" } ?? "")
-                let signature = "\(label)|\(p.symbol)"
-                keepPersonas.insert(p.id)
-                if personaObjects[p.id]?.signature != signature {
-                    let old = personaObjects[p.id]?.node
-                    old?.removeFromParentNode()
-                    let node = Self.personaNode(label, color: p.color)
-                    node.simdPosition = old?.simdPosition ?? p.position
-                    root.addChildNode(node)
-                    personaObjects[p.id] = (signature, node)
-                }
-                let node = personaObjects[p.id]!.node
-                // just above the head (or on the device), under the words they said
-                node.simdPosition = p.position + SIMD3(0, 0.1 * max(p.distance, 0.5), 0)
-                node.simdScale = SIMD3(repeating: max(p.distance, 0.5))
-            }
-            for (id, object) in personaObjects where !keepPersonas.contains(id) {
-                object.node.removeFromParentNode()
-                personaObjects[id] = nil
             }
 
             var keepRoots = Set<Int>()
@@ -632,13 +562,11 @@ struct ARNetworkView: UIViewRepresentable {
         }
 
         /// A dot on the word, its card just below; sized for 1 m away, scaled by distance.
-        /// A spoken word's dot is its speaker's colour, and its card is edged with it.
-        private static func wordNode(key: String, text: String, language: String, linked: Bool,
-                                     speaker: UIColor? = nil) -> SCNNode {
+        private static func wordNode(key: String, text: String, language: String, linked: Bool) -> SCNNode {
             let node = SCNNode()
             node.name = "w:\(key)"
-            let dot = SCNNode(geometry: SCNSphere(radius: speaker == nil ? 0.007 : 0.009))
-            let color: UIColor = speaker ?? (linked ? .systemYellow : UIColor(white: 1, alpha: 0.8))
+            let dot = SCNNode(geometry: SCNSphere(radius: 0.007))
+            let color: UIColor = linked ? .systemYellow : UIColor(white: 1, alpha: 0.8)
             dot.geometry?.firstMaterial?.diffuse.contents = color
             dot.geometry?.firstMaterial?.emission.contents = color.withAlphaComponent(0.6)
             node.addChildNode(dot)
@@ -649,43 +577,8 @@ struct ARNetworkView: UIViewRepresentable {
             card.simdPosition = SIMD3(0, -0.035, 0)
             card.opacity = linked ? 1 : 0.7
             card.constraints = [UprightLabel.constraint()]
-            if let speaker, let plane = card.geometry as? SCNPlane {
-                // a band of the speaker's colour behind the card
-                let band = SCNNode(geometry: SCNPlane(width: plane.width + 0.008, height: plane.height + 0.008))
-                band.geometry?.firstMaterial?.diffuse.contents = speaker
-                band.geometry?.firstMaterial?.lightingModel = .constant
-                band.geometry?.firstMaterial?.isDoubleSided = true
-                band.simdPosition = SIMD3(0, 0, -0.001)
-                card.addChildNode(band)
-            }
             node.addChildNode(card)
             return node
-        }
-
-        /// The speaker's tag: who (person, device, voice) and the language they speak.
-        private static func personaNode(_ label: String, color: UIColor) -> SCNNode {
-            let node = SCNNode()
-            let text = label as NSString
-            let font = UIFont.systemFont(ofSize: 24, weight: .bold)
-            let size = text.size(withAttributes: [.font: font])
-            let pill = CGSize(width: size.width + 28, height: size.height + 10)
-            let image = UIGraphicsImageRenderer(size: pill).image { _ in
-                color.withAlphaComponent(0.92).setFill()
-                UIBezierPath(roundedRect: CGRect(origin: .zero, size: pill), cornerRadius: pill.height / 2).fill()
-                text.draw(at: CGPoint(x: 14, y: 5), withAttributes: [.font: font, .foregroundColor: UIColor.white])
-            }
-            let plane = SCNPlane(width: pill.width / 1800, height: pill.height / 1800)
-            plane.firstMaterial?.diffuse.contents = image
-            plane.firstMaterial?.lightingModel = .constant
-            plane.firstMaterial?.isDoubleSided = true
-            let tag = SCNNode(geometry: plane)
-            tag.constraints = [UprightLabel.constraint()]
-            node.addChildNode(tag)
-            return node
-        }
-
-        static func languageName(_ code: String) -> String {
-            code == "sh" ? "Serbo-Croatian" : Locale.current.localizedString(forLanguageCode: code) ?? code
         }
 
         /// The colour of a step in a word's history, as in Explore: borrowings orange,
@@ -694,6 +587,7 @@ struct ARNetworkView: UIViewRepresentable {
             switch kind {
             case "borrowed", "learned", "calque", "semantic_loan": return .systemOrange
             case "root": return .systemGray
+            case "skip": return UIColor(white: 1, alpha: 0.35)  // steps left out
             default: return UIColor(red: 1, green: 0.85, blue: 0.3, alpha: 1)
             }
         }
@@ -814,59 +708,6 @@ struct ARNetworkView: UIViewRepresentable {
             }
             return best?.focus
         }
-    }
-}
-
-/// Who is talking: a chip per persona (their colour, where they are, their language), a
-/// listening light, and the latest thing said, as a caption.
-private struct ConversationOverlay: View {
-    let conversation: Conversation
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if conversation.listening || !conversation.personas.isEmpty || conversation.error != nil {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        if conversation.listening {
-                            Label(conversation.connecting ? "Loading voices…" : "Listening",
-                                  systemImage: conversation.talking ? "waveform" : "mic.fill")
-                                .symbolEffect(.variableColor, isActive: conversation.talking)
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                        ForEach(conversation.personas) { p in
-                            Label(p.title + (p.lang.map { " · \($0)" } ?? ""), systemImage: p.symbol)
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .foregroundStyle(.white)
-                                .background(Color(p.color), in: Capsule())
-                                .accessibilityIdentifier("persona-\(p.id)")
-                        }
-                    }
-                    .font(.caption.bold())
-                    .padding(.horizontal, 12)
-                }
-                .padding(.top, 8)
-                if let error = conversation.error {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.white)
-                        .padding(8).background(.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
-                        .padding(.horizontal, 12)
-                }
-            }
-            Spacer()
-            if let caption = conversation.caption,
-               let p = conversation.personas.first(where: { $0.id == caption.persona }) {
-                (Text(p.title + ": ").bold().foregroundColor(Color(p.color)) + Text(caption.text))
-                    .font(.callout)
-                    .lineLimit(2)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 64)  // above the buttons
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .allowsHitTesting(false)
     }
 }
 

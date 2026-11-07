@@ -30,6 +30,33 @@ enum SearchDepth {
     }
 }
 
+/// How many of the steps between a word and its root are drawn, in Explore, Talk and AR.
+/// Words and roots are always drawn; along each line the steps nearest the word are kept and
+/// the rest are skipped, the line jumping straight on to the root. A view setting: the
+/// search still goes as deep as SearchDepth says.
+enum TreeDepth {
+    static let storageKey = "treeMiddleSteps"
+    static let all = -1
+    static let defaultValue = all
+    static let choices = [0, 1, 2, 3, 4, 6]
+
+    static var current: Int {
+        UserDefaults.standard.object(forKey: storageKey) as? Int ?? defaultValue
+    }
+
+    static func title(_ steps: Int) -> String {
+        switch steps {
+        case all: return "All steps"
+        case 0: return "Words and roots only"
+        case 1: return "1 step between"
+        default: return "\(steps) steps between"
+        }
+    }
+
+    /// Short, for buttons: "All" or "2".
+    static func short(_ steps: Int) -> String { steps == all ? "All" : "\(steps)" }
+}
+
 /// How many words a scene can hold at once: past this the oldest drop off. Set in Settings.
 enum WordLimit {
     static let storageKey = "maxWords"
@@ -170,6 +197,32 @@ enum NetworkLayers: String, CaseIterable, Identifiable {
     }
     var showsRoots: Bool { self != .meanings }
     var showsMeanings: Bool { self != .roots }
+}
+
+/// What Explore (and Talk) draws: the whole network, or only the paths that connect words —
+/// through a shared root, by having the same meaning, or both.
+enum ExploreScope: String, CaseIterable, Identifiable {
+    case whole, roots, meanings, both
+    static let storageKey = "exploreScope"
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .whole: return "Whole network"
+        case .roots: return "Connections: shared roots"
+        case .meanings: return "Connections: same meaning"
+        case .both: return "Connections: both"
+        }
+    }
+    var short: String {
+        switch self {
+        case .whole: return "All"
+        case .roots: return "Roots"
+        case .meanings: return "Meanings"
+        case .both: return "Links"
+        }
+    }
+    var keepsRoots: Bool { self == .roots || self == .both }
+    var keepsMeanings: Bool { self == .meanings || self == .both }
 }
 
 extension SceneResponse {

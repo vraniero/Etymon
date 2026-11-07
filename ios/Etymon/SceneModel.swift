@@ -35,9 +35,6 @@ final class SceneModel {
     private(set) var rejected = Set<String>()
     /// True while words come from the camera or a photo (not typed): unknown words are dropped.
     private var collecting = false
-    /// The language each spoken word was said in, by lowercased word: sent with the word,
-    /// so a conversation in several languages resolves each word in its own.
-    private(set) var spokenLanguages: [String: String] = [:]
 
     /// Text seen so far, for detecting the scene's language.
     private var seenText = ""
@@ -61,20 +58,6 @@ final class SceneModel {
             merged.removeFirst(merged.count - limit)
         }
         update(words: merged)
-    }
-
-    /// What someone said (an utterance, in the language it was detected in). Like the
-    /// camera, it collects: the oldest words drop off past the word limit, and words the
-    /// dictionary doesn't know (misheard) stay out. Returns the words it brought.
-    @discardableResult
-    func hear(_ text: String, lang: String?) -> [String] {
-        collecting = true
-        let heard = WordExtractor.words(in: text).filter { !rejected.contains($0.lowercased()) }
-        if let lang {
-            for word in heard { spokenLanguages[word.lowercased()] = lang }
-        }
-        add(text: text)
-        return heard
     }
 
     /// A recognition pass over a camera frame or photo. A full pass may add words; a quick
@@ -175,7 +158,6 @@ final class SceneModel {
     /// Replace the scene with typed words (the first ones, up to the word limit).
     func set(typed text: String) {
         collecting = false
-        spokenLanguages = [:]
         seenText = text
         update(words: Array(WordExtractor.words(in: text).prefix(WordLimit.current)))
     }
@@ -192,7 +174,6 @@ final class SceneModel {
         words = []
         seenText = ""
         language = nil
-        spokenLanguages = [:]
         response = nil
         error = nil
         lastRequested = []
@@ -244,9 +225,7 @@ final class SceneModel {
         defer { isLoading = false }
         do {
             let depth = SearchDepth.current
-            let languages = requested.map { spokenLanguages[$0.lowercased()] }
-            let result = try await client().scene(words: requested, lang: language, maxCost: depth,
-                                                  wordLanguages: languages)
+            let result = try await client().scene(words: requested, lang: language, maxCost: depth)
             // a newer scene, or the same one at another depth, superseded this one
             guard requested == words, depth == SearchDepth.current else { return }
             response = result

@@ -25,13 +25,13 @@ struct HelpView: View {
                                 + "the whole network back.")
                     HelpRow(symbol: "photo", title: "Photo",
                             text: "Pick a picture with text; the network is drawn over it.")
-                    HelpRow(symbol: "mic.fill", title: "Conversation (in AR)",
-                            text: "Tap the microphone in AR. Each voice becomes a persona: found on the "
-                                + "face whose mouth moves as it talks, on a TV or speaker in view, or "
-                                + "placed to one side when it comes from off camera. The words each one "
-                                + "says float above them in their colour, in the language they spoke, "
-                                + "and link to everything else in the scene as they are said. "
-                                + "Needs the Mac backend's listening models (see README).")
+                    HelpRow(symbol: "bubble.left.and.text.bubble.right", title: "Talk",
+                            text: "Tap the microphone and talk (or let people around you talk). Each "
+                                + "voice is a speaker with its own colour; every word said appears in a "
+                                + "3D space with its tree of ancestors above it. When two words meet in a "
+                                + "shared root, or mean the same, they connect — with a chime (the "
+                                + "speaker button turns sound off). Several languages can mix. Needs the "
+                                + "Mac backend's listening models (see README).")
                     HelpRow(symbol: "keyboard", title: "Type",
                             text: "Type or paste words and press Connect; the network is shown as a graph.")
                 }

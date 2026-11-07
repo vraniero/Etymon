@@ -35,8 +35,21 @@ struct ContentView: View {
     @State private var talk = TalkSession()  // kept while other tabs are used
     @State private var confirmStartOver = false
     @State private var saving = false
-    @State private var source: Source = LaunchOptions.source.flatMap { Source.available.contains($0) ? $0 : nil }
-        ?? (Source.available.first { $0.isLive } ?? .type)
+    @State private var source: Source
+    @State private var confirmHome = false
+    /// Back to the home screen; nil when there is none (launched straight into a mode).
+    private let onHome: (() -> Void)?
+
+    /// The mode picked on the home screen, else `-source` (UI tests), else the live mode.
+    init(start: Source? = nil, onHome: (() -> Void)? = nil) {
+        _source = State(initialValue: start ?? Self.launchSource ?? Self.defaultSource)
+        self.onHome = onHome
+    }
+
+    static var launchSource: Source? {
+        LaunchOptions.source.flatMap { Source.available.contains($0) ? $0 : nil }
+    }
+    static var defaultSource: Source { Source.available.first { $0.isLive } ?? .type }
     @State private var selection: Selection?
     @State private var showSettings = false
     @State private var showHelp = false
@@ -84,6 +97,21 @@ struct ContentView: View {
             .onChange(of: searchDepth) { model.refresh() }
             .onChange(of: maxWords) { model.applyWordLimit() }
             .toolbar {
+                if let onHome {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Home", systemImage: "house") {
+                            if hasScene { confirmHome = true } else { onHome() }
+                        }
+                        .accessibilityIdentifier("home")
+                        .confirmationDialog("Leave this scene?", isPresented: $confirmHome,
+                                            titleVisibility: .visible) {
+                            Button("Save to library…") { save() }
+                            Button("Leave without saving", role: .destructive) { onHome() }
+                        } message: {
+                            Text("Going home discards the words and network so far, unless you save them.")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Start over", systemImage: "trash") { confirmStartOver = true }
                         .disabled(source == .talk ? talk.isEmpty : model.words.isEmpty)
@@ -224,6 +252,16 @@ struct ContentView: View {
         guard let response = model.response else { return }
         selection = Selection.of(key, in: response)
     }
+
+    /// The save sheet can't open over Explore: it opens once Explore has gone.
+    private func afterExploreCloses(_ action: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            action()
+        }
+    }
+
+    private var hasScene: Bool { source == .talk ? !talk.isEmpty : !model.words.isEmpty }
 
     private func startOver() {
         if source == .talk { talk.clear() } else { model.reset() }

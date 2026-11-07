@@ -238,7 +238,8 @@ With the backend running, from the repository root:
 
 The UI tests drive the app in the simulator like a user (photo → overlay → detail sheets
 → graph; typed words and layers; Explore in 3D; saving a scene and opening it, its
-lineages and Explore all with the server gone). They start the app on
+lineages and Explore all with the server gone; the home menu, into a mode and back).
+They start the app on
 `http://localhost:8000` and with an empty, in-memory store of saved scenes. To keep their screenshots, add `TEST_RUNNER_ETYMON_SHOTS=/some/folder` in front
 of the `xcodebuild` command.
 
@@ -279,7 +280,12 @@ The same guide is in the app: tap **?** in the toolbar.
 
 ### Using the app
 
-**Modes** (the switch at the top):
+**Home** — the app opens on a menu of every mode (AR or Camera, Photo, Type, Talk) and
+**My network**, over the icon's tree come alive: its branches grow, sway and carry light
+out to their glowing dots (still with Reduce Motion). **?** and the gear are at the top.
+In a mode, the house button goes back home; if the scene isn't saved, it asks first.
+
+**Modes** (the switch at the top, or the home menu):
 
 - **AR** (the default) — point the phone at text and the words are pinned where they are in the room;
   each shared root floats above the words it joins, linked to them, and same-meaning
@@ -382,7 +388,8 @@ explored later, without the server:
   ancestor.
 - **Tap a bubble** — how the two words reach their shared ancestor, step by step, and the
   deeper line above it to the oldest known root.
-- **Tap a word** — that word's own lineage.
+- **Tap a word** — that word's own lineage. A word made of others goes back through
+  each of them: *football* to *foot* and to *ball*, *Handschuh* to *Hand* and *Schuh*.
 - **Gear** (top right) — Settings: **Maximum words** a scene can discover at once
   (5–200, default 20, in steps of 5 up to 50 and of 10 above; lowering it drops the
   oldest words now), My network (remember where scenes are saved, offline lookups kept
@@ -409,10 +416,13 @@ same-meaning `semantic` links), optionally with the scene's likely language:
 ```
 
 returns each word's resolved terms, and for every pair that shares ancestry the nearest
-meeting point (*pater*), both paths to it, and the `deeper` chain above it
+meeting point (*pater*), both paths to it, and the `deeper` ancestry above it
 (*\*patēr* → *\*ph₂tḗr* → root *\*peh₂-*), plus a `nodes` table for labels.
-Up to 500 words per scene (`MAX_WORDS`): about half a second for 500, a few hundred
-milliseconds for 200. `GET /word?text=padri&lang=it` gives one word's lineage;
+An ancestry is a tree, not one line: a compound has an ancestor for each part
+(*Eisenbahn* → *Eisen* and *Bahn*). Each step carries `from`, the node it is an ancestor
+of; the main line comes first (`connect.ancestry`, up to 40 steps).
+Up to 500 words per scene (`MAX_WORDS`): about a second for 500, half a second for 200.
+`GET /word?text=padri&lang=it` gives one word's ancestry the same way;
 `GET /neighbors?id=<node>` a node's parents and children (Explore's Expand). The app keeps
 the answers of these two lookups on the phone, for offline use. `ETYMON_DB` points at the database
 (default `pipeline/data/etymon.sqlite`).

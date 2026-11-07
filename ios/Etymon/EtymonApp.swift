@@ -8,7 +8,7 @@ struct EtymonApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                ContentView()
+                RootView()
                 if showSplash {
                     SplashView()
                         .transition(.opacity)
@@ -23,6 +23,29 @@ struct EtymonApp: App {
             }
         }
         .modelContainer(.etymon())
+    }
+}
+
+/// The home screen, and the mode picked on it. Launched with `-source` (UI tests), the
+/// app goes straight into that mode and has no home.
+struct RootView: View {
+    @State private var mode: ContentView.Source? = ContentView.launchSource
+    private let hasHome = ContentView.launchSource == nil
+
+    var body: some View {
+        ZStack {
+            if let mode {
+                ContentView(start: mode, onHome: hasHome ? { go(nil) } : nil)
+                    .transition(.opacity.combined(with: .scale(scale: 1.04)))
+            } else {
+                HomeView { go($0) }
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+        }
+    }
+
+    private func go(_ mode: ContentView.Source?) {
+        withAnimation(.easeInOut(duration: 0.35)) { self.mode = mode }
     }
 }
 

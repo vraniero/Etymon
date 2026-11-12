@@ -60,13 +60,45 @@ final class EtymonUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-source", "type", "-demo"]
         launch(app)
-        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 15))
+
+        // the results lead with plain sentences: padre and paternalistic meet at Latin pater
+        let display = app.descendants(matching: .any)["typeDisplay"]
+        XCTAssertTrue(display.waitForExistence(timeout: 15))
+        display.buttons["Story"].tap()  // the choice is remembered from earlier runs
+        let card = app.buttons.matching(identifier: "storyCard")
+            .containing(NSPredicate(format: "label CONTAINS 'from Latin pater'")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["meaningCard"].firstMatch.exists,
+                      "aperta = open: same meaning, different origins")
+        XCTAssertTrue(app.descendants(matching: .any)["typedWords"].exists,
+                      "once connected, the editor shrinks to the words")
+        shot("5-typed-story")
+        card.tap()
+        XCTAssertTrue(app.navigationBars["Connection"].waitForExistence(timeout: 5))
+        dismissSheet(app)
+        XCTAssertTrue(app.navigationBars["Connection"].waitForNonExistence(timeout: 5))
+
+        // the diagram is one tap away
+        display.buttons["Tree"].tap()
+        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["nox"].exists)
         XCTAssertTrue(app.staticTexts["= open"].exists)
         shot("5-typed-graph")
 
-        // roots and meanings can be shown separately or together
+        // the help screen explains the controls
+        app.descendants(matching: .any)["help"].tap()
+        XCTAssertTrue(app.navigationBars["How it works"].waitForExistence(timeout: 5))
+        // more modes than fit: the list renders rows as they scroll into view
+        let typeHelp = app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'tap an example'")).firstMatch
+        for _ in 0..<3 where !typeHelp.exists { app.swipeUp() }
+        XCTAssertTrue(typeHelp.exists)
+        shot("7-help")
+        app.navigationBars["How it works"].buttons["Done"].tap()
+
+        // roots and meanings, every step and the search depth: all under one button
+        app.buttons["viewOptions"].tap()
         let picker = app.descendants(matching: .any)["layersPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
         picker.buttons["Roots"].tap()
         XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["= open"].exists, "Roots view shows no meaning links")
@@ -76,28 +108,24 @@ final class EtymonUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["pater"].exists, "Meanings view shows no ancestors")
         shot("9-meanings-only")
         picker.buttons["Both"].tap()
-        XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 5))
-
-        // the help screen explains the controls
-        app.descendants(matching: .any)["help"].tap()
-        XCTAssertTrue(app.navigationBars["How it works"].waitForExistence(timeout: 5))
-        // more modes than fit: the list renders rows as they scroll into view
-        let typeHelp = app.staticTexts["Type or paste words and press Connect; the network is shown as a graph."]
-        for _ in 0..<3 where !typeHelp.exists { app.swipeUp() }
-        XCTAssertTrue(typeHelp.exists)
-        shot("7-help")
-        app.navigationBars["How it works"].buttons["Done"].tap()
-
-        let fullPaths = app.descendants(matching: .any)["fullPaths"]
-        fullPaths.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["searchDepthBar"].exists)
+        app.switches["fullPaths"].tap()
+        shot("10-view-options")
+        app.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.97)).tap()  // close the popover
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 5))
         sleep(1)
         shot("6-typed-full-paths")
+
+        // Edit brings the editor back
+        app.buttons["editWords"].tap()
+        XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout: 5))
+        display.buttons["Story"].tap()  // back to the default
     }
 
     func testMapJourney() {
         let app = XCUIApplication()
         // the argument shows the map without changing the remembered Tree/Map choice
-        app.launchArguments = ["-source", "type", "-demo", "-networkStyle", "map"]
+        app.launchArguments = ["-source", "type", "-demo", "-networkStyle", "map", "-typeShowsStory", "NO"]
         launch(app)
         let follow = app.descendants(matching: .any)["journeyMenu"].firstMatch
         XCTAssertTrue(follow.waitForExistence(timeout: 15))
@@ -133,7 +161,7 @@ final class EtymonUITests: XCTestCase {
 
     func testExploreIn3D() {
         let app = XCUIApplication()
-        app.launchArguments = ["-source", "type", "-demo"]
+        app.launchArguments = ["-source", "type", "-demo", "-typeShowsStory", "NO"]  // the tree
         launch(app)
         XCTAssertTrue(app.staticTexts["pater"].waitForExistence(timeout: 15))
 
@@ -214,6 +242,40 @@ final class EtymonUITests: XCTestCase {
 
     /// Save the photo's scene, then lose the server: the saved scene, its overlay, a word's
     /// lineage and Explore all still work from what is on the device.
+    /// Talk's bars: View options picks a speaker, the filter line says so, ✕ clears it;
+    /// the conversation menu holds Save and Start over; a tap on empty space hides the bars.
+    func testTalkControls() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-source", "talk", "-talkdemo", "-talkView", "Explore",
+                               "-exploreScope", "whole", "-treeMiddleSteps", "-1"]
+        launch(app)
+        XCTAssertTrue(app.buttons["listen"].waitForExistence(timeout: 10), "the mic sits in the dock")
+        XCTAssertTrue(app.descendants(matching: .any)["talkStatus"].exists, "the status line under it")
+        XCTAssertTrue(app.descendants(matching: .any)["caption"].waitForExistence(timeout: 30))
+        XCTAssertFalse(app.buttons["talkFilters"].exists, "nothing filtered: no filter line")
+
+        app.buttons["talkOptions"].tap()
+        let speaker = app.buttons["speaker-1"]
+        XCTAssertTrue(app.navigationBars["View options"].waitForExistence(timeout: 5))
+        for _ in 0..<4 where !speaker.isHittable { app.collectionViews.firstMatch.swipeUp() }
+        XCTAssertTrue(speaker.waitForExistence(timeout: 5), "speakers are listed in View options")
+        speaker.tap()
+        shot("talk-options")
+        app.buttons["Done"].tap()
+        let filters = app.buttons["talkFilters"]
+        XCTAssertTrue(filters.waitForExistence(timeout: 5))
+        XCTAssertTrue(filters.label.contains("Speaker 1"), filters.label)
+        shot("talk-filtered")
+        app.buttons["clearTalkFilters"].tap()
+        XCTAssertTrue(filters.waitForNonExistence(timeout: 5), "✕ shows everything again")
+
+        app.buttons["talkMenu"].tap()
+        XCTAssertTrue(app.buttons["Save to library…"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Start over…"].exists)
+        app.buttons["Save to library…"].tap()  // the save sheet
+        XCTAssertTrue(app.navigationBars.element.waitForExistence(timeout: 10))
+    }
+
     func testSavedSceneWorksOffline() {
         let app = XCUIApplication()
         // a fresh in-memory store; no location prompt

@@ -69,6 +69,14 @@ final class TalkSession {
     private(set) var notice: String?
     private var noticeFade: Task<Void, Never>?
 
+    /// The language last spoken (Wiktionary code), or last detected if Etymon doesn't know it;
+    /// `lastLanguageKnown` says which.
+    private(set) var lastLanguage: String?
+    private(set) var lastLanguageKnown = true
+
+    /// Connections made so far: shared roots plus same meanings.
+    var connectionCount: Int { graph.connections.roots + graph.connections.meanings }
+
     /// Words said, and how many of them grew a tree.
     private(set) var wordsHeard = 0
     private(set) var wordsFound = 0
@@ -172,6 +180,7 @@ final class TalkSession {
         lastConnection = nil
         wordsHeard = 0
         wordsFound = 0
+        lastLanguage = nil
         wordTimes = []
         outcome = [:]
         for i in speakers.indices { speakers[i].words = 0 }
@@ -214,6 +223,10 @@ final class TalkSession {
         } else {
             number = speakers.count + 1
             speakers.append(Speaker(id: voice, number: number, lang: lang))
+        }
+        if let heardIn = lang ?? detected {
+            lastLanguage = heardIn
+            lastLanguageKnown = lang != nil
         }
         let words = WordExtractor.words(in: text)
         let id = nextCaption

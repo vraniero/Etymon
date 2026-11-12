@@ -84,12 +84,10 @@ struct ContentView: View {
                     PhotoInput(model: model, layers: layers, onSelect: select)
                     status
                 case .type:
-                    TypeInput(model: model).frame(height: 130)
-                    status
-                    if model.response != nil { layersPicker }
-                    graph
+                    TypeScreen(model: model, layers: $layers, fullPaths: $fullPaths,
+                               onSelect: select, onSave: save, onExplore: explore)
                 case .talk:
-                    TalkView(session: talk, saving: saving, onSave: save)
+                    TalkView(session: talk, saving: saving, onSave: save, onStartOver: startOver)
                 }
             }
             .navigationTitle("Etymon")
@@ -112,6 +110,8 @@ struct ContentView: View {
                         }
                     }
                 }
+                // Talk has Start over in its own menu (⋯), with Save
+                if source != .talk {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Start over", systemImage: "trash") { confirmStartOver = true }
                         .disabled(source == .talk ? talk.isEmpty : model.words.isEmpty)
@@ -124,6 +124,7 @@ struct ContentView: View {
                             Text("The words and network so far go away. Save them to your library "
                                  + "to keep them — saved scenes work offline.")
                         }
+                }
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button("My network", systemImage: "books.vertical") { showLibrary = true }
@@ -180,9 +181,7 @@ struct ContentView: View {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
             } else if model.words.isEmpty {
-                Text(source.isLive ? "Point at some text." :
-                     source == .photo ? "Pick a photo with some text." :
-                     "Type a few words.")
+                Text(source.isLive ? "Point at some text." : "Pick a photo with some text.")
             } else {
                 let roots = model.response?.connections.count ?? 0
                 let meanings = model.response?.semanticLinks.count ?? 0
@@ -190,7 +189,7 @@ struct ContentView: View {
                      + (model.language.map { " · \($0)" } ?? ""))
             }
             Spacer()
-            if !source.showsGraphInline, model.response != nil {
+            if model.response != nil {
                 Menu {
                     Picker("Show", selection: $layers) {
                         ForEach(NetworkLayers.allCases) { Text($0.title).tag($0) }
@@ -201,11 +200,7 @@ struct ContentView: View {
                 .controlSize(.mini).buttonStyle(.bordered)
                 .accessibilityIdentifier("layersMenu")
             }
-            if source.showsGraphInline, layers.showsRoots, model.response?.connections.isEmpty == false {
-                Toggle("Full paths", isOn: $fullPaths)
-                    .toggleStyle(.button).controlSize(.mini)
-                    .accessibilityIdentifier("fullPaths")
-            } else if !source.showsGraphInline, model.response != nil {
+            if model.response != nil {
                 Button("Graph", systemImage: "point.3.connected.trianglepath.dotted") {
                     selection = .graph
                 }
@@ -441,29 +436,7 @@ enum LaunchOptions {
         return ContentView.Source.allCases.first { $0.rawValue.lowercased() == name }
     }
     static var photoPath: String? { value(after: "-photo") }
-}
-
-private struct TypeInput: View {
-    let model: SceneModel
-    @State private var text = "Farmacia aperta tutta la notte, padre\npaternalistic nocturnal pharmacy open night"
-
-    var body: some View {
-        VStack {
-            TextEditor(text: $text)
-                .font(.title3)
-                .scrollContentBackground(.hidden)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-            Button("Connect", systemImage: "point.3.connected.trianglepath.dotted") {
-                model.set(typed: text)
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .padding(.horizontal)
-        .onAppear {
-            // `-demo` launch argument: connect the sample words straight away (screenshots, UI checks)
-            if ProcessInfo.processInfo.arguments.contains("-demo") { model.set(typed: text) }
-        }
-    }
+    static var isDemo: Bool { ProcessInfo.processInfo.arguments.contains("-demo") }
 }
 
 extension UIImage {

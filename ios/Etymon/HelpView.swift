@@ -33,7 +33,9 @@ struct HelpView: View {
                                 + "speaker button turns sound off). Several languages can mix. Needs the "
                                 + "Mac backend's listening models (see README).")
                     HelpRow(symbol: "keyboard", title: "Type",
-                            text: "Type or paste words and press Connect; the network is shown as a graph.")
+                            text: "Type or paste words (or tap an example) and press Connect. Each "
+                                + "connection is told as a short story — tap one for every step — "
+                                + "and Tree or Map shows the whole network. Edit changes the words.")
                 }
 
                 Section("Reading the network") {
@@ -142,9 +144,9 @@ struct HelpView: View {
                             text: "The same network as a diagram (camera and photo).")
                     HelpRow(symbol: "square.3.layers.3d", title: "Both · Roots · Meanings",
                             text: "Choose what the network shows: shared roots (etymology), same "
-                                + "meanings (translations), or both side by side. Above the graph, and "
-                                + "in the menu at the bottom right of the camera and photo views; "
-                                + "the overlay follows the same choice.")
+                                + "meanings (translations), or both side by side. In Type, under the "
+                                + "sliders button; in camera and photo, in the menu at the bottom "
+                                + "right. The overlay follows the same choice.")
                     HelpRow(symbol: "map", title: "Tree · Map",
                             text: "Show the network as a tree, or on a world map: each word sits where "
                                 + "its language was spoken and arcs run from ancestor to descendant, "
@@ -154,9 +156,10 @@ struct HelpView: View {
                             text: "On the map, pick a word and travel its line back in time, from "
                                 + "the word you saw to its oldest known root: step with ‹ ›, or press "
                                 + "play. The way travelled is drawn bold, the way ahead faint.")
-                    HelpRow(symbol: "arrow.up.and.down.text.horizontal", title: "Full paths",
-                            text: "In the graph, show every step of each chain instead of just the "
-                                + "shared ancestor.")
+                    HelpRow(symbol: "arrow.up.and.down.text.horizontal", title: "Show every step",
+                            text: "In the tree, show every word between yours and the shared "
+                                + "ancestor instead of just the ancestor (Full paths in camera and "
+                                + "photo's graph; under the sliders button in Type).")
                     HelpRow(symbol: "hand.tap", title: "Tap a bubble",
                             text: "How the two words reach their shared ancestor, step by step, and "
                                 + "everything above it, up to the oldest known roots.")
@@ -168,7 +171,8 @@ struct HelpView: View {
                                 + "(default 16; each link costs about 1, a jump to a reconstructed "
                                 + "root 6). The bar above the graph shows it: the shaded part is how "
                                 + "far the search actually got, the orange mark what the deepest "
-                                + "connection needed. Change it with − and + there or in Settings.")
+                                + "connection needed. Change it with − and + there (in Type, under "
+                                + "the sliders button) or in Settings.")
                     HelpRow(symbol: "gear", title: "Settings",
                             text: "The backend address (http://localhost:8000 in the simulator, "
                                 + "http://<your Mac's address>:8000 on a phone) and the search depth.")

@@ -1,47 +1,63 @@
 import SwiftUI
 
-/// What the listening is doing, always in view while Talk listens: connecting, listening
-/// (with the microphone's level, so it's plain that it picks up sound), hearing someone,
-/// working out what was said. Then how many words have come in, and how many grew a tree.
-struct TalkStatus: View {
+/// The microphone, at the bottom within reach of the thumb, and everything about the
+/// listening around it: the button itself shows the state (off; connecting; listening, its
+/// ring breathing with the sound; hearing someone; working out what was said), the level
+/// to its left, how much has come in to its right, and one line of plain words below.
+struct TalkDock: View {
     let session: TalkSession
-    /// One short line, for the folded controls.
-    var compact = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            indicator
-            Text(compact ? shortMessage : message).font(.caption.bold()).lineLimit(compact ? 1 : 2)
-            if !compact { Spacer(minLength: 4) }
-            if compact, session.wordsHeard > 0 {
-                Text("\(session.wordsHeard)/\(session.wordsFound)")
-                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-            } else if session.wordsHeard > 0 {
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text("\(session.wordsHeard) words · \(session.wordsFound) found")
-                    if session.listening { Text("\(session.wordsPerMinute)/min") }
+        VStack(spacing: 6) {
+            HStack {
+                Group {
+                    if session.listening {
+                        LevelMeter(level: session.level, color: tint)
+                    } else {
+                        Color.clear
+                    }
                 }
-                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                MicButton(session: session, tint: tint)
+                    .padding(.horizontal, 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    if session.wordsHeard > 0 {
+                        Text("\(session.wordsHeard) words")
+                        Text("\(session.connectionCount) links")
+                    }
+                }
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("talkWordCount")
             }
+            .frame(height: 74)
+            Text(message)
+                .font(.caption.bold())
+                .foregroundStyle(session.phase == .off ? .secondary : .primary)
+                .lineLimit(1)
+                .accessibilityIdentifier("talkStatus")
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(tint.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(tint.opacity(0.7), lineWidth: 1))
+        .foregroundStyle(.white)
+        .padding(.top, 10).padding(.bottom, 8)
+        .frame(maxWidth: .infinity)
+        .background(Color(red: 0.09, green: 0.1, blue: 0.15))
         .animation(.snappy, value: session.phase)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("talkStatus")
+    }
+
+    private var language: String? {
+        guard let lang = session.lastLanguage else { return nil }
+        let name = TalkCaption.name(lang)
+        return session.lastLanguageKnown ? name : "\(name)?"
     }
 
     private var message: String {
         switch session.phase {
         case .off:
-            return session.isEmpty ? "Microphone off — tap it to listen" : "Microphone off"
+            return session.isEmpty ? "Tap to listen" : "Paused — tap to listen again"
         case .connecting:
-            return "Connecting… the first time, the speech models take up to a minute to load"
+            return "Connecting… the first time takes up to a minute"
         case .listening:
-            return session.level > 0.25 ? "Listening — speak a little longer…" : "Listening — no one speaking"
+            return ["Listening", language].compactMap { $0 }.joined(separator: " · ")
         case .hearing:
             return "Hearing someone…"
         case .understanding:
@@ -49,34 +65,55 @@ struct TalkStatus: View {
         }
     }
 
-    private var shortMessage: String {
-        switch session.phase {
-        case .off: return "Mic off"
-        case .connecting: return "Connecting…"
-        case .listening: return "Listening"
-        case .hearing: return "Hearing…"
-        case .understanding: return "Understanding…"
-        }
-    }
-
     private var tint: Color {
         switch session.phase {
         case .off: return .gray
         case .connecting, .understanding: return .orange
-        case .listening: return .blue
+        case .listening: return .red
         case .hearing: return .green
         }
     }
+}
 
-    @ViewBuilder private var indicator: some View {
-        switch session.phase {
-        case .off:
-            Image(systemName: "mic.slash").foregroundStyle(.secondary)
-        case .connecting, .understanding:
-            ProgressView().controlSize(.small).tint(.orange)
-        case .listening, .hearing:
-            LevelMeter(level: session.level, color: tint)
+/// The big round microphone: grey when off, red while listening with a ring that swells
+/// with the sound, green while someone talks, a turning arc while connecting or working.
+struct MicButton: View {
+    let session: TalkSession
+    let tint: Color
+    @State private var turning = false
+
+    var body: some View {
+        Button {
+            if session.listening { session.stop() } else { Task { await session.start() } }
+        } label: {
+            ZStack {
+                Circle()
+                    .stroke(tint.opacity(0.45), lineWidth: 4)
+                    .scaleEffect(session.listening ? 1.08 + CGFloat(session.level) * 0.3 : 1)
+                    .opacity(session.listening ? 1 : 0)
+                    .animation(.easeOut(duration: 0.1), value: session.level)
+                if session.phase == .connecting || session.phase == .understanding {
+                    Circle()
+                        .trim(from: 0, to: 0.3)
+                        .stroke(tint, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .scaleEffect(1.08)
+                        .rotationEffect(.degrees(turning ? 360 : 0))
+                        .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: turning)
+                        .onAppear { turning = true }
+                        .onDisappear { turning = false }
+                }
+                Circle()
+                    .fill(session.listening ? tint : Color.white.opacity(0.18))
+                Image(systemName: session.listening ? "mic.fill" : "mic.slash.fill")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .symbolEffect(.variableColor, isActive: session.talking)
+            }
+            .frame(width: 64, height: 64)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(session.listening ? "Stop listening" : "Listen")
+        .accessibilityIdentifier("listen")
     }
 }
 

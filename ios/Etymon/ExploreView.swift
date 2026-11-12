@@ -18,6 +18,12 @@ struct ExploreView: View {
     /// Explore of the live scene: clear everything from here, after offering to save it.
     var startOver: (save: () -> Void, discard: () -> Void)?
     var onClose: (() -> Void)?
+    /// Talk: the word panel only while a word is picked (its own bar is below).
+    var panelOnlyWhenSelected = false
+    /// A tap on empty space with nothing picked (Talk hides its bars).
+    var onTapEmpty: (() -> Void)?
+    /// The picked word changed (Talk moves its captions out of the panel's way).
+    var onSelect: ((Int?) -> Void)?
     @State private var confirmStartOver = false
     @AppStorage(TreeDepth.storageKey) private var treeDepth = TreeDepth.defaultValue
     @AppStorage(ExploreScope.storageKey) private var scope: ExploreScope = .whole
@@ -49,14 +55,17 @@ struct ExploreView: View {
             ZStack(alignment: .bottom) {
                 NetworkScene(graph: graph, version: graph.version, depth: treeDepth, speakers: speakers,
                              scope: scope,
-                             follow: follow, selected: $selected)
+                             follow: follow, onTapEmpty: onTapEmpty, selected: $selected)
                     .ignoresSafeArea()
                     .accessibilityIdentifier("explore3D")
 
                 VStack(spacing: 0) {
                     if showsHeader { header }
                     Spacer(minLength: 0)
-                    panel(screen: geo.size.height)
+                    if !panelOnlyWhenSelected || selected != nil {
+                        panel(screen: geo.size.height)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
             }
         }
@@ -66,7 +75,9 @@ struct ExploreView: View {
             // Talk: the space first, the panel when a word is picked
             if follow { detent = .collapsed }
         }
+        .animation(.snappy, value: selected == nil)
         .onChange(of: selected) { _, id in
+            onSelect?(id)
             // picking a word in the tree brings its details up
             if id != nil, detent == .collapsed { withAnimation(.snappy) { detent = .peek } }
         }
@@ -367,6 +378,7 @@ struct NetworkScene: UIViewRepresentable {
     var scope = ExploreScope.whole
     /// Keep the whole network in view as it grows (until the user picks a word).
     var follow = false
+    var onTapEmpty: (() -> Void)?
     @Binding var selected: Int?
 
     /// A node's colour: a spoken word takes its speaker's.
@@ -433,6 +445,7 @@ struct NetworkScene: UIViewRepresentable {
 
     func updateUIView(_ view: SCNView, context: Context) {
         context.coordinator.selectedBinding = $selected
+        context.coordinator.onTapEmpty = onTapEmpty
         context.coordinator.follow = follow && selected == nil
         context.coordinator.sync(graph, depth: depth, speakers: speakers, scope: scope)
         context.coordinator.select(selected)
@@ -790,9 +803,13 @@ struct NetworkScene: UIViewRepresentable {
             return nil
         }
 
+        var onTapEmpty: (() -> Void)?
+
         @objc func tap(_ gesture: UITapGestureRecognizer) {
             guard let view else { return }
-            selectedBinding.wrappedValue = nodeID(at: gesture.location(in: view))
+            let id = nodeID(at: gesture.location(in: view))
+            if id == nil, selectedBinding.wrappedValue == nil { onTapEmpty?() }
+            selectedBinding.wrappedValue = id
         }
 
         /// Press and hold a node, then drag it: it stays where it is put, links follow.

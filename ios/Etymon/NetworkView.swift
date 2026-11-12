@@ -9,21 +9,28 @@ struct NetworkView: View {
     var compact = true
     /// Steps drawn between a word and where it meets another (overrides compact; -1: all).
     var middle: Int?
+    /// The Tree/Map switch and the search depth bar; off where the screen has its own
+    /// (Type keeps them in its view options).
+    var showsControls = true
     var onSelect: (GraphLayout.Key) -> Void
     @AppStorage(NetworkStyle.storageKey) private var style: NetworkStyle = .tree
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("View", selection: $style) {
-                ForEach(NetworkStyle.allCases) { Text($0.title).tag($0) }
+            if showsControls {
+                Picker("View", selection: $style) {
+                    ForEach(NetworkStyle.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal).padding(.vertical, 4)
+                .accessibilityIdentifier("networkStyle")
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal).padding(.vertical, 4)
-            .accessibilityIdentifier("networkStyle")
             switch style {
             case .tree: tree
             case .map:
-                if let search = response.search { SearchDepthBar(search: search).padding(.bottom, 6) }
+                if showsControls, let search = response.search {
+                    SearchDepthBar(search: search).padding(.bottom, 6)
+                }
                 GeoMapView(response: response, onSelect: onSelect)
             }
         }
@@ -35,7 +42,7 @@ struct NetworkView: View {
         let loose = response.words.indices.filter { !connected.contains($0) }
         ScrollView {
             VStack(spacing: 8) {
-                if let search = response.search {
+                if showsControls, let search = response.search {
                     SearchDepthBar(search: search)
                 }
                 ForEach(clusters, id: \.self) { cluster in
@@ -154,13 +161,20 @@ private struct ClusterGraph: View {
 /// deepest connection needed. The stepper changes the depth and searches again.
 struct SearchDepthBar: View {
     let search: SearchInfo
+    /// The summary above the stepper rather than beside it, for narrow places (a popover).
+    var stacked = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            if stacked {
                 Text(summary).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                SearchDepthStepper(compact: true).font(.caption).fixedSize()
+                SearchDepthStepper(compact: true).font(.subheadline)
+            } else {
+                HStack {
+                    Text(summary).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    SearchDepthStepper(compact: true).font(.caption).fixedSize()
+                }
             }
             GeometryReader { geo in
                 let w = geo.size.width, limit = max(search.maxCost, 1)

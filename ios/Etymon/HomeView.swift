@@ -32,7 +32,7 @@ struct HomeView: View {
     }
 
     /// Where the tree's trunk crosses the title, as a fraction of the height (as on the icon).
-    static let treeCenter: CGFloat = 0.29
+    static let treeCenter: CGFloat = 0.40
 
     private var title: some View {
         VStack(spacing: 6) {
@@ -68,24 +68,31 @@ struct HomeView: View {
         .environment(\.colorScheme, .dark)
     }
 
+    /// Compact, so the tree keeps most of the screen: the ways in as one row of tiles,
+    /// games and the saved network as a second, shorter row.
     private var menu: some View {
-        VStack(spacing: 10) {
-            ForEach(Array(ContentView.Source.available.enumerated()), id: \.element) { i, source in
-                ModeCard(symbol: source.symbol, title: source.title, text: source.blurb,
-                         color: source.color) { onOpen(source) }
-                    .accessibilityIdentifier("home-\(source.rawValue)")
-                    .modifier(Arrive(shown: appeared, index: i))
+        let modes = ContentView.Source.available
+        return VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                ForEach(Array(modes.enumerated()), id: \.element) { i, source in
+                    ModeTile(symbol: source.symbol, title: source.title, hint: source.blurb,
+                             color: source.color) { onOpen(source) }
+                        .accessibilityIdentifier("home-\(source.rawValue)")
+                        .modifier(Arrive(shown: appeared, index: i))
+                }
             }
-            ModeCard(symbol: "gamecontroller", title: "Games",
-                     text: "Root Chain, Impostor, Cousin Hunt, Birthplace, Scavenger: play with the roots.",
-                     color: IconPalette.blue) { showGames = true }
-                .accessibilityIdentifier("homeGames")
-                .modifier(Arrive(shown: appeared, index: ContentView.Source.available.count))
-            ModeCard(symbol: "books.vertical", title: "My network",
-                     text: "Everything you saved, offline: as a list, on a map, as one network.",
-                     color: IconPalette.coral) { showLibrary = true }
-                .accessibilityIdentifier("homeLibrary")
-                .modifier(Arrive(shown: appeared, index: ContentView.Source.available.count + 1))
+            HStack(spacing: 10) {
+                ModeTile(symbol: "gamecontroller", title: "Games",
+                         hint: "Root Chain, Impostor, Cousin Hunt, Birthplace, Scavenger: play with the roots.",
+                         color: IconPalette.blue, wide: true) { showGames = true }
+                    .accessibilityIdentifier("homeGames")
+                    .modifier(Arrive(shown: appeared, index: modes.count))
+                ModeTile(symbol: "books.vertical", title: "My network",
+                         hint: "Everything you saved, offline: as a list, on a map, as one network.",
+                         color: IconPalette.coral, wide: true) { showLibrary = true }
+                    .accessibilityIdentifier("homeLibrary")
+                    .modifier(Arrive(shown: appeared, index: modes.count + 1))
+            }
         }
     }
 }
@@ -102,41 +109,52 @@ private struct Arrive: ViewModifier {
     }
 }
 
-private struct ModeCard: View {
+/// A glass tile: the glowing icon over its name (or beside it, when `wide`). The longer
+/// description is read out by VoiceOver.
+private struct ModeTile: View {
     let symbol: String
     let title: String
-    let text: String
+    let hint: String
     let color: Color
+    var wide = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle().fill(color.opacity(0.22))
-                    Circle().strokeBorder(color.opacity(0.8), lineWidth: 1.5)
-                    Image(systemName: symbol).font(.title3).foregroundStyle(color)
+            Group {
+                if wide {
+                    HStack(spacing: 10) { badge(size: 34); label; Spacer(minLength: 0) }
+                        .padding(.horizontal, 12).frame(height: 64)
+                } else {
+                    VStack(spacing: 10) { badge(size: 48); label }
+                        .frame(maxWidth: .infinity).frame(height: 112)
                 }
-                .frame(width: 46, height: 46)
-                .shadow(color: color.opacity(0.7), radius: 10)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline).foregroundStyle(.white)
-                    Text(text).font(.caption).foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(2).multilineTextAlignment(.leading)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.4))
             }
-            .padding(.horizontal, 14).padding(.vertical, 11)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18)
                 .strokeBorder(LinearGradient(colors: [color.opacity(0.5), .white.opacity(0.08)],
-                                             startPoint: .leading, endPoint: .trailing),
+                                             startPoint: .topLeading, endPoint: .bottomTrailing),
                               lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(CardPress())
+        .accessibilityLabel(title)
+        .accessibilityHint(hint)
+    }
+
+    private var label: some View {
+        Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+            .lineLimit(1).minimumScaleFactor(0.8)
+    }
+
+    private func badge(size: CGFloat) -> some View {
+        ZStack {
+            Circle().fill(color.opacity(0.22))
+            Circle().strokeBorder(color.opacity(0.8), lineWidth: 1.5)
+            Image(systemName: symbol).font(size > 40 ? .title3 : .body).foregroundStyle(color)
+        }
+        .frame(width: size, height: size)
+        .shadow(color: color.opacity(0.7), radius: 10)
     }
 }
 

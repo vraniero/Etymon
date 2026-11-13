@@ -9,7 +9,7 @@ struct SceneRequest: Encodable {
     }
     let words: [Word]
     let lang: String?
-    let maxCost: Double
+    let maxCost: Double?  // nil: automatic (left out of the request)
 
     enum CodingKeys: String, CodingKey {
         case words, lang
@@ -19,12 +19,21 @@ struct SceneRequest: Encodable {
 
 /// How far up each word's ancestry the backend climbs, in edge costs: most links cost 1,
 /// a jump to a reconstructed root 6. Deeper finds older, more distant shared ancestors.
+/// Automatic by default: the backend searches at 16 and goes deeper only for words left
+/// unconnected. A depth chosen by hand turns automatic off.
 enum SearchDepth {
     static let storageKey = "searchDepth"
+    static let autoKey = "searchDepthAuto"
     static let defaultValue = 16.0  // pipeline/connect.py MAX_COST
     static let range = 2.0...40.0  // backend accepts 1...40
 
-    static var current: Double {
+    static var isAuto: Bool { UserDefaults.standard.object(forKey: autoKey) as? Bool ?? true }
+
+    /// The depth to ask for; nil: automatic.
+    static var current: Double? { isAuto ? nil : manual }
+
+    /// The depth chosen by hand (used when automatic is off).
+    static var manual: Double {
         let stored = UserDefaults.standard.double(forKey: storageKey)
         return stored == 0 ? defaultValue : min(max(stored, range.lowerBound), range.upperBound)
     }
@@ -81,12 +90,13 @@ enum WordLimit {
 
 /// How deep the search that produced a scene went.
 struct SearchInfo: Codable, Hashable {
-    let maxCost: Double  // the depth asked for
+    let maxCost: Double  // the depth asked for; automatic: the deepest it went
     let reached: Double  // how far the deepest climb actually got (stops early when the data runs out)
     let depth: Double  // what the deepest connection found needs (0 if none)
+    var auto: Bool? = nil  // automatic depth; absent from older backends
 
     enum CodingKeys: String, CodingKey {
-        case reached, depth
+        case reached, depth, auto
         case maxCost = "max_cost"
     }
 }
@@ -171,15 +181,31 @@ struct SemanticLink: Codable, Hashable, Identifiable {
     var id: String { "\(a)=\(b)" }
 }
 
+/// Two scene words that are forms of one word (invitato, invitare): they share every
+/// ancestor, so no shared root is drawn between them, just this.
+struct SameWord: Codable, Hashable, Identifiable {
+    let a: Int
+    let b: Int
+    let lemma: Int  // node id of the entry both are forms of
+    var id: String { "\(a)~\(b)" }
+}
+
 struct SceneResponse: Codable {
     let search: SearchInfo?  // absent from older backends
     let words: [SceneWord]
     let connections: [Connection]  // shared etymological ancestry
     let semantic: [SemanticLink]?  // same meaning across languages
+    var sameWord: [SameWord]? = nil  // forms of one word; absent from older backends
     let nodes: [String: Node]  // JSON object keys are strings
+
+    enum CodingKeys: String, CodingKey {
+        case search, words, connections, semantic, nodes
+        case sameWord = "same_word"
+    }
 
     func node(_ id: Int) -> Node? { nodes[String(id)] }
     var semanticLinks: [SemanticLink] { semantic ?? [] }
+    var sameWordLinks: [SameWord] { sameWord ?? [] }
 }
 
 struct WordResponse: Codable {
@@ -259,7 +285,7 @@ extension SceneResponse {
         SceneResponse(search: search, words: words,
                       connections: layers.showsRoots ? connections : [],
                       semantic: layers.showsMeanings ? semanticLinks : [],
-                      nodes: nodes)
+                      sameWord: sameWord, nodes: nodes)
     }
 }
 

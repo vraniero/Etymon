@@ -59,6 +59,11 @@ struct HelpView: View {
                     LegendRow(text: "Inside a bubble: the words share the root **and** mean the same.") {
                         Text("= night").font(.caption.weight(.semibold)).foregroundStyle(.green)
                     }
+                    LegendRow(text: "**Same word**: two forms of one word, e.g. invitato and "
+                              + "invitare. They share every ancestor, so there is no root to "
+                              + "show: tap for the word's lineage. (Story and Tree in Type.)") {
+                        Text("same word").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    }
                     LegendRow(text: "**Same meaning** in different languages, without a shared "
                               + "root, e.g. Aperta = Open.") {
                         Text("= open").font(.caption.weight(.semibold)).foregroundStyle(.white)
@@ -168,11 +173,12 @@ struct HelpView: View {
                                 + "each of them: football to foot and to ball.")
                     HelpRow(symbol: "ruler", title: "Search depth",
                             text: "How far back each word's ancestry is searched for shared roots "
-                                + "(default 16; each link costs about 1, a jump to a reconstructed "
-                                + "root 6). The bar above the graph shows it: the shaded part is how "
-                                + "far the search actually got, the orange mark what the deepest "
-                                + "connection needed. Change it with − and + there (in Type, under "
-                                + "the sliders button) or in Settings.")
+                                + "(each link costs about 1, a jump to a reconstructed root 6). "
+                                + "Automatic by default: 16, and deeper, up to 40, for words still "
+                                + "unconnected. The bar above the graph shows it: the shaded part is "
+                                + "how far the search actually got, the orange mark what the deepest "
+                                + "connection needed. − and + there pick a depth by hand, Auto goes "
+                                + "back (in Type, under the sliders button; also in Settings).")
                     HelpRow(symbol: "gear", title: "Settings",
                             text: "The backend address (http://localhost:8000 in the simulator, "
                                 + "http://<your Mac's address>:8000 on a phone) and the search depth.")

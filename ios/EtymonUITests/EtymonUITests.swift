@@ -56,6 +56,24 @@ final class EtymonUITests: XCTestCase {
         shot("4-graph-sheet")
     }
 
+    /// invitato is a form of invitare: one "same word" card, and a grey arc in the Tree.
+    func testFormsOfOneWord() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-source", "type", "-text", "invitare invitato padre paternal"]
+        launch(app)
+        let display = app.descendants(matching: .any)["typeDisplay"]
+        XCTAssertTrue(display.waitForExistence(timeout: 15))
+        display.buttons["Story"].tap()
+        let card = app.buttons.matching(identifier: "formCard")
+            .containing(NSPredicate(format: "label CONTAINS 'invitato is a form of invitare'")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 15))
+        shot("6-forms-story")
+        display.buttons["Tree"].tap()
+        XCTAssertTrue(app.staticTexts["same word"].waitForExistence(timeout: 5))
+        shot("6-forms-tree")
+        display.buttons["Story"].tap()
+    }
+
     func testTypedWords() {
         let app = XCUIApplication()
         app.launchArguments = ["-source", "type", "-demo"]

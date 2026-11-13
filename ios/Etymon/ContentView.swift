@@ -59,6 +59,7 @@ struct ContentView: View {
     @State private var showLibrary = false
     @AppStorage(NetworkLayers.storageKey) private var layers: NetworkLayers = .both
     @AppStorage(SearchDepth.storageKey) private var searchDepth = SearchDepth.defaultValue
+    @AppStorage(SearchDepth.autoKey) private var searchDepthAuto = true
     @AppStorage(WordLimit.storageKey) private var maxWords = WordLimit.defaultValue
 
     var body: some View {
@@ -93,6 +94,7 @@ struct ContentView: View {
             .navigationTitle("Etymon")
             .navigationBarTitleDisplayMode(.inline)
             .onChange(of: searchDepth) { model.refresh() }
+            .onChange(of: searchDepthAuto) { model.refresh() }
             .onChange(of: maxWords) { model.applyWordLimit() }
             .toolbar {
                 if let onHome {
@@ -437,6 +439,8 @@ enum LaunchOptions {
     }
     static var photoPath: String? { value(after: "-photo") }
     static var isDemo: Bool { ProcessInfo.processInfo.arguments.contains("-demo") }
+    /// `-text "invitare invitato"`: Type connects these words on launch (UI checks).
+    static var typedText: String? { value(after: "-text") }
 }
 
 extension UIImage {

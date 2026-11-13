@@ -30,6 +30,10 @@ from query import MODERN, resolve  # noqa: E402
 DB_PATH = Path(os.environ.get("ETYMON_DB", PIPELINE / "data" / "etymon.sqlite"))
 MAX_WORDS = 500  # per scene; the app's word limit (up to 200) stays well under it
 MAX_SEARCH_DEPTH = 40
+# Automatic depth: everything at the default first; words still unconnected are searched
+# again, deeper, until each has a link or the deepest is reached. Deeper searches find
+# more distant (and more doubtful) roots, so words already connected don't get them.
+AUTO_DEPTHS = (MAX_COST, 24, 32, MAX_SEARCH_DEPTH)
 PUNCT = " \t\n.,;:!?¡¿\"'“”‘’«»()[]{}"
 
 app = FastAPI(title="Etymon", version="0.1")
@@ -49,11 +53,11 @@ def _c(code, text):
     return f"\033[{code}m{text}\033[0m" if _COLOR else text
 
 
-def log_scene(body, words, connections, semantic, nodes, ms):
+def log_scene(body, words, connections, semantic, nodes, ms, searched):
     roots, same = len(connections), len(semantic)
     lines = [f"{_c('1;36', 'scene')}  {body.lang or '--'}  {len(words)} words · "
              f"{_c('33', f'{roots} shared roots')} · {_c('32', f'{same} same meaning')} · "
-             f"depth {body.max_cost:g} · {ms:.0f} ms"]
+             f"depth {'auto ' if body.max_cost is None else ''}{searched:g} · {ms:.0f} ms"]
     width = max([len(f"{words[c.a].text} ↔ {words[c.b].text}") for c in connections] + [0])
     for c in connections:
         pair = f"{words[c.a].text} ↔ {words[c.b].text}"
@@ -91,9 +95,11 @@ class SceneIn(BaseModel):
     lang: str | None = Field(None, description="likely language of the whole scene, tried "
                                                "first for words without their own lang")
     connections_per_pair: int = Field(1, ge=1, le=3)
-    max_cost: float = Field(MAX_COST, ge=1, le=MAX_SEARCH_DEPTH,
-                            description="search depth: how far up each word's ancestry to "
-                                        "climb, in edge costs (most links cost 1, a root 6)")
+    max_cost: float | None = Field(None, ge=1, le=MAX_SEARCH_DEPTH,
+                                   description="search depth: how far up each word's ancestry "
+                                               "to climb, in edge costs (most links cost 1, a "
+                                               "root 6); none: automatic, deeper only for "
+                                               "words left unconnected")
 
 
 class Step(BaseModel):
@@ -123,6 +129,12 @@ class SemanticLink(BaseModel):
     meaning: str  # the shared English meaning: aperta = open
 
 
+class SameWord(BaseModel):
+    a: int  # index into words
+    b: int
+    lemma: int  # node id of the entry both are forms of: invitato and invitare -> invitare
+
+
 class Node(BaseModel):
     id: int
     lang: str
@@ -142,7 +154,8 @@ class WordOut(BaseModel):
 
 
 class Search(BaseModel):
-    max_cost: float  # the search depth asked for
+    max_cost: float  # the search depth asked for; automatic: the deepest it went
+    auto: bool = False  # automatic depth
     reached: float  # how far up the deepest climb actually got (<= max_cost)
     depth: float  # depth of the deepest connection found (0 if none)
 
@@ -152,6 +165,8 @@ class SceneOut(BaseModel):
     words: list[WordOut]
     connections: list[Connection]  # shared etymological ancestry
     semantic: list[SemanticLink]  # same meaning, different languages
+    same_word: list[SameWord] = []  # forms of one word (padre, padri): not connected
+                                    # through an ancestor, since they share every one
     nodes: dict[int, Node]
 
 
@@ -264,7 +279,7 @@ def health():
 @app.post("/scene", response_model=SceneOut)
 def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
     started = time.perf_counter()
-    words, trees, seen = [], [], set()
+    words, seen = [], set()
     for w in body.words:
         text = normalize(w.text)
         key = (text.lower(), w.lang)
@@ -273,12 +288,21 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
         seen.add(key)
         lang, ids = best_language(db, text, w.lang, hint=body.lang)
         words.append(WordOut(text=text, lang=lang, terms=ids, meanings=meanings_for(db, ids)))
-        trees.append(climb(db, ids, body.max_cost) if ids else {})
 
-    connections, used, above = [], set(), {}
-    for (i, ta), (j, tb) in combinations(enumerate(trees), 2):
-        if not ta or not tb or set(words[i].terms) & set(words[j].terms):
-            continue
+    climbed = {}  # (word, depth) -> tree
+
+    def tree_at(i, depth):
+        if (i, depth) not in climbed:
+            climbed[i, depth] = climb(db, words[i].terms, depth) if words[i].terms else {}
+        return climbed[i, depth]
+
+    connections, same_word, used, above = [], [], set(), {}
+    linked = set()  # words with a connection or a same-word link
+
+    def connect(i, j, depth):
+        ta, tb = tree_at(i, depth), tree_at(j, depth)
+        if not ta or not tb:
+            return
         for distance, meet, pa, pb in meetings(ta, tb, body.connections_per_pair):
             if meet not in above:
                 above[meet] = ancestry(db, meet)
@@ -289,16 +313,42 @@ def scene(body: SceneIn, db: sqlite3.Connection = Depends(get_db)):
                                           deeper=tree(deeper)))
             used.update(n for n, _ in pa + pb)
             used.update(n for n, _, _ in deeper)
+            linked.update((i, j))
+
+    depths = (body.max_cost,) if body.max_cost is not None else AUTO_DEPTHS
+    pairs = []
+    for i, j in combinations(range(len(words)), 2):
+        shared = [t for t in words[i].terms if t in words[j].terms]
+        if shared:
+            same_word.append(SameWord(a=i, b=j, lemma=shared[0]))
+            linked.update((i, j))
+        else:
+            pairs.append((i, j))
+    searched = depths[0]
+    for i, j in pairs:
+        connect(i, j, searched)
+    for depth in depths[1:]:
+        loose = {i for i, w in enumerate(words) if w.terms and i not in linked}
+        todo = [(i, j) for i, j in pairs if i in loose or j in loose]
+        # deeper only helps where a tree grows: most ancestries run out well before
+        involved = {k for p in todo for k in p}
+        if not any(len(tree_at(k, depth)) > len(tree_at(k, searched)) for k in involved):
+            break
+        for i, j in todo:
+            connect(i, j, depth)
+        searched = depth
     connections.sort(key=lambda c: c.distance)
     used.update(t for w in words for t in w.terms)
     semantic = semantic_links(words)
     nodes = nodes_for(db, used)
-    log_scene(body, words, connections, semantic, nodes, (time.perf_counter() - started) * 1000)
-    search = Search(max_cost=body.max_cost,
-                    reached=max((c for t in trees for c, _, _ in t.values()), default=0.0),
+    log_scene(body, words, connections, semantic, nodes, (time.perf_counter() - started) * 1000,
+              searched)
+    search = Search(max_cost=searched, auto=body.max_cost is None,
+                    reached=max((c for t in climbed.values() for c, _, _ in t.values()),
+                                default=0.0),
                     depth=max((c.depth for c in connections), default=0.0))
     return SceneOut(search=search, words=words, connections=connections, semantic=semantic,
-                    nodes=nodes)
+                    same_word=same_word, nodes=nodes)
 
 
 @app.get("/word")

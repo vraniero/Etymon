@@ -49,6 +49,7 @@ struct NetworkView: View {
                     ClusterGraph(layout: GraphLayout(response, compact: compact, middle: middle, only: Set(cluster)),
                                  response: response,
                                  semantic: response.semanticLinks.filter { cluster.contains($0.a) },
+                                 forms: response.sameWordLinks.filter { cluster.contains($0.a) },
                                  onSelect: onSelect)
                     Divider().padding(.horizontal, 40)
                 }
@@ -77,6 +78,7 @@ private struct ClusterGraph: View {
     let layout: GraphLayout
     let response: SceneResponse
     let semantic: [SemanticLink]
+    var forms: [SameWord] = []
     var onSelect: (GraphLayout.Key) -> Void
 
     private let levelHeight: CGFloat = 70
@@ -84,7 +86,7 @@ private struct ClusterGraph: View {
     private let margin = CGSize(width: 60, height: 28)
 
     var body: some View {
-        let below: CGFloat = semantic.isEmpty ? 0 : 44  // room for the meaning arcs
+        let below: CGFloat = semantic.isEmpty && forms.isEmpty ? 0 : 44  // room for the arcs under the words
         let size = CGSize(width: layout.width * slotWidth + margin.width * 2,
                           height: CGFloat(layout.maxLevel) * levelHeight + margin.height * 2 + below)
         ScrollView(.horizontal, showsIndicators: false) {
@@ -117,6 +119,18 @@ private struct ClusterGraph: View {
                         context.stroke(path, with: .color(.green),
                                        style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
                     }
+                    // forms of one word: a thin grey arc, shallower than the meaning arcs
+                    for link in forms {
+                        guard let a = layout.items[.word(link.a)], let b = layout.items[.word(link.b)] else {
+                            continue
+                        }
+                        let p = point(a, in: size, below: below), q = point(b, in: size, below: below)
+                        var path = Path()
+                        path.move(to: CGPoint(x: p.x, y: p.y + 20))
+                        path.addQuadCurve(to: CGPoint(x: q.x, y: q.y + 20),
+                                          control: CGPoint(x: (p.x + q.x) / 2, y: p.y + 20 + below * 0.6))
+                        context.stroke(path, with: .color(.gray), style: StrokeStyle(lineWidth: 1.5))
+                    }
                 }
                 // a shortcut says how many steps it leaves out
                 ForEach(layout.links.filter { $0.skipped > 0 }, id: \.self) { link in
@@ -133,6 +147,17 @@ private struct ClusterGraph: View {
                     NodeLabel(item: item, response: response)
                         .position(point(item, in: size, below: below))
                         .onTapGesture { onSelect(item.key) }
+                }
+                ForEach(forms) { link in
+                    if let a = layout.items[.word(link.a)], let b = layout.items[.word(link.b)] {
+                        let p = point(a, in: size, below: below), q = point(b, in: size, below: below)
+                        Text("same word")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(Color(.systemBackground).opacity(0.9)))
+                            .position(x: (p.x + q.x) / 2, y: p.y + 20 + below * 0.32)
+                            .onTapGesture { onSelect(.term(link.lemma)) }
+                    }
                 }
                 ForEach(semantic) { link in
                     if let a = layout.items[.word(link.a)], let b = layout.items[.word(link.b)] {
@@ -199,7 +224,8 @@ struct SearchDepthBar: View {
     private var summary: String {
         let limit = search.maxCost.formatted(), reached = search.reached.formatted()
         let deepest = search.depth > 0 ? " · deepest connection \(search.depth.formatted())" : ""
-        return "Searched \(reached) of \(limit)\(deepest)"
+        let how = search.auto == true ? " (auto)" : ""
+        return "Searched \(reached) of \(limit)\(how)\(deepest)"
     }
 }
 

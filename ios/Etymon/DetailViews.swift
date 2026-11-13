@@ -110,7 +110,6 @@ struct WordDetail: View {
 
 struct SettingsView: View {
     @AppStorage(APIClient.baseURLKey) private var baseURL = APIClient.defaultBaseURL
-    @AppStorage(SearchDepth.storageKey) private var depth = SearchDepth.defaultValue
     @AppStorage(TreeDepth.storageKey) private var treeDepth = TreeDepth.defaultValue
     @AppStorage(WordLimit.storageKey) private var maxWords = WordLimit.defaultValue
     @Environment(\.dismiss) private var dismiss
@@ -165,16 +164,14 @@ struct SettingsView: View {
                 }
                 Section {
                     SearchDepthStepper()
-                    Button("Reset to \(SearchDepth.defaultValue.formatted())") {
-                        depth = SearchDepth.defaultValue
-                    }
-                    .disabled(depth == SearchDepth.defaultValue)
                 } header: {
                     Text("Search")
                 } footer: {
                     Text("How far back each word's ancestry is searched for shared roots. Each link "
-                         + "costs about 1 (a jump to a reconstructed root costs 6). Deeper finds older, "
-                         + "more distant connections but can be noisier and slower.")
+                         + "costs about 1 (a jump to a reconstructed root costs 6). Automatic searches "
+                         + "to \(SearchDepth.defaultValue.formatted()) and goes deeper only for words "
+                         + "left unconnected, up to \(SearchDepth.range.upperBound.formatted()). By hand, "
+                         + "deeper finds older, more distant connections but can be noisier and slower.")
                 }
             }
             .navigationTitle("Settings")
@@ -221,19 +218,35 @@ struct ExploreScopeMenu: View {
 
 /// Search depth control, shared by Settings and the network header. Stored in
 /// UserDefaults; ContentView asks the backend again when it changes.
+/// Automatic by default; − or + picks a depth by hand (and turns automatic off).
 struct SearchDepthStepper: View {
     var compact = false
     @AppStorage(SearchDepth.storageKey) private var depth = SearchDepth.defaultValue
+    @AppStorage(SearchDepth.autoKey) private var auto = true
 
     var body: some View {
-        Stepper(value: $depth, in: SearchDepth.range, step: 1) {
-            if compact {
-                Text("Depth \(depth.formatted())").monospacedDigit()
-            } else {
-                LabeledContent("Search depth", value: depth.formatted()).monospacedDigit()
+        if compact {
+            HStack(spacing: 8) {
+                Toggle("Auto", isOn: $auto)
+                    .toggleStyle(.button).controlSize(.small)
+                    .accessibilityIdentifier("searchDepthAuto")
+                stepper { Text(auto ? "Depth" : "Depth \(depth.formatted())").monospacedDigit() }
+            }
+        } else {
+            Toggle("Automatic depth", isOn: $auto)
+                .accessibilityIdentifier("searchDepthAuto")
+            if !auto {
+                stepper {
+                    LabeledContent("Search depth", value: depth.formatted()).monospacedDigit()
+                }
             }
         }
-        .accessibilityIdentifier("searchDepth")
+    }
+
+    private func stepper(@ViewBuilder label: () -> some View) -> some View {
+        let byHand = Binding(get: { depth }, set: { depth = $0; auto = false })
+        return Stepper(value: byHand, in: SearchDepth.range, step: 1, label: label)
+            .accessibilityIdentifier("searchDepth")
     }
 }
 

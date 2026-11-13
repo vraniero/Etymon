@@ -178,6 +178,18 @@ final class OverlayTests: XCTestCase {
 final class SearchDepthTests: XCTestCase {
     override func tearDown() {
         UserDefaults.standard.removeObject(forKey: SearchDepth.storageKey)
+        UserDefaults.standard.removeObject(forKey: SearchDepth.autoKey)
+    }
+
+    func testAutomaticByDefaultLeavesDepthOut() throws {
+        UserDefaults.standard.removeObject(forKey: SearchDepth.autoKey)
+        XCTAssertNil(SearchDepth.current)
+        let data = try JSONEncoder().encode(SceneRequest(words: [.init(text: "padre", lang: "it")],
+                                                         lang: nil, maxCost: SearchDepth.current))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(json["max_cost"])
+        UserDefaults.standard.set(false, forKey: SearchDepth.autoKey)
+        XCTAssertEqual(SearchDepth.current, SearchDepth.defaultValue)
     }
 
     func testRequestSendsDepth() throws {
@@ -189,19 +201,19 @@ final class SearchDepthTests: XCTestCase {
 
     func testDecodesSearchInfo() throws {
         let json = """
-        {"search": {"max_cost": 16, "reached": 7, "depth": 5},
+        {"search": {"max_cost": 16, "reached": 7, "depth": 5, "auto": true},
          "words": [], "connections": [], "semantic": [], "nodes": {}}
         """
         let r = try JSONDecoder().decode(SceneResponse.self, from: Data(json.utf8))
-        XCTAssertEqual(r.search, SearchInfo(maxCost: 16, reached: 7, depth: 5))
+        XCTAssertEqual(r.search, SearchInfo(maxCost: 16, reached: 7, depth: 5, auto: true))
         XCTAssertEqual(r.showing(.meanings).search, r.search)
     }
 
     func testCurrentDefaultsAndClamps() {
         UserDefaults.standard.removeObject(forKey: SearchDepth.storageKey)
-        XCTAssertEqual(SearchDepth.current, SearchDepth.defaultValue)
+        XCTAssertEqual(SearchDepth.manual, SearchDepth.defaultValue)
         UserDefaults.standard.set(500.0, forKey: SearchDepth.storageKey)
-        XCTAssertEqual(SearchDepth.current, SearchDepth.range.upperBound)
+        XCTAssertEqual(SearchDepth.manual, SearchDepth.range.upperBound)
     }
 }
 

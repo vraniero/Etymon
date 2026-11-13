@@ -178,3 +178,38 @@ def test_no_false_link_through_template_flags_or_compound_parts():
     assert r["connections"] == []
     w = client.get("/word", params={"text": "talking", "lang": "en"}).json()
     assert ("en", "en") not in {(n["lang"], n["word"]) for n in w["nodes"].values()}
+
+
+def test_forms_of_one_word_are_linked_as_the_same_word():
+    """invitato is a form of invitare: no shared-ancestor connection (they share every
+    ancestor), but a same-word link to the entry both resolve to."""
+    r = client.post("/scene", json={"words": [{"text": "invitare", "lang": "it"},
+                                              {"text": "invitato", "lang": "it"},
+                                              {"text": "padre", "lang": "it"}]}).json()
+    assert not [c for c in r["connections"] if {c["a"], c["b"]} == {0, 1}]
+    [same] = r["same_word"]
+    assert {same["a"], same["b"]} == {0, 1}
+    assert r["nodes"][str(same["lemma"])]["word"] == "invitare"
+
+
+def test_automatic_depth_goes_deeper_only_when_needed(monkeypatch):
+    words = [{"text": "padre", "lang": "it"}, {"text": "paternalistic", "lang": "en"}]
+    # automatic is the default; padre and paternalistic connect at the first depth
+    search = client.post("/scene", json={"words": words}).json()["search"]
+    assert search["auto"] and search["max_cost"] == api.MAX_COST
+    # too shallow to connect them at first: the search goes on, deeper
+    monkeypatch.setattr(api, "AUTO_DEPTHS", (2, api.MAX_COST))
+    r = client.post("/scene", json={"words": words}).json()
+    assert meet_word(r, 0, 1) == ("la", "pater")
+    assert r["search"]["max_cost"] == api.MAX_COST
+    # a chosen depth is kept as it is
+    r = client.post("/scene", json={"words": words, "max_cost": 2}).json()
+    assert not r["connections"] and not r["search"]["auto"]
+
+
+def test_automatic_depth_stops_when_ancestries_run_out():
+    """acqua and water share no root: deeper climbs find nothing new, so it stops."""
+    r = client.post("/scene", json={"words": [{"text": "acqua", "lang": "it"},
+                                              {"text": "water", "lang": "en"}]}).json()
+    assert not r["connections"]
+    assert r["search"]["max_cost"] == api.MAX_COST

@@ -27,7 +27,7 @@ struct TypeScreen: View {
     var onSave: () -> Void
     var onExplore: () -> Void
 
-    @State private var text = LaunchOptions.isDemo ? TypeExamples.demo : ""
+    @State private var text = LaunchOptions.typedText ?? (LaunchOptions.isDemo ? TypeExamples.demo : "")
     @State private var expanded = true  // the editor, rather than the chips row
     @State private var showOptions = false
     @FocusState private var focused: Bool
@@ -56,8 +56,8 @@ struct TypeScreen: View {
             if isEmpty { text = ""; expanded = true }  // started over
         }
         .onAppear {
-            // `-demo` launch argument: connect the sample words straight away (screenshots, UI checks)
-            if LaunchOptions.isDemo { connect() }
+            // `-demo` or `-text` launch argument: connect straight away (screenshots, UI checks)
+            if LaunchOptions.isDemo || LaunchOptions.typedText != nil { connect() }
         }
     }
 
@@ -197,8 +197,11 @@ struct TypeScreen: View {
 
     private func summary(_ r: SceneResponse) -> String {
         let roots = r.connections.count, same = r.semanticLinks.count
-        if roots == 0 && same == 0 { return "No connections yet" }
-        return "\(roots) shared root\(roots == 1 ? "" : "s") · \(same) same meaning"
+        let forms = StoryList.formGroups(r).count
+        let parts = [roots > 0 ? "\(roots) shared root\(roots == 1 ? "" : "s")" : nil,
+                     same > 0 ? "\(same) same meaning" : nil,
+                     forms > 0 ? "\(forms) same word" : nil].compactMap { $0 }
+        return parts.isEmpty ? "No connections yet" : parts.joined(separator: " · ")
     }
 
     private var displayPicker: some View {
@@ -310,17 +313,24 @@ struct StoryList: View {
         var id: String { meaning }
     }
 
+    struct FormGroup: Identifiable {
+        let lemma: Int
+        var words: [Int]
+        var id: Int { lemma }
+    }
+
     var body: some View {
         let roots = Self.rootGroups(response)
         let meanings = Self.meaningGroups(response, besides: roots)
-        let linked = Set(roots.flatMap(\.words) + meanings.flatMap(\.words))
+        let forms = Self.formGroups(response)
+        let linked = Set(roots.flatMap(\.words) + meanings.flatMap(\.words) + forms.flatMap(\.words))
         let unknown = response.words.indices.filter { response.words[$0].terms.isEmpty }
         let loose = response.words.indices.filter {
             !linked.contains($0) && !response.words[$0].terms.isEmpty
         }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
-                if roots.isEmpty && meanings.isEmpty {
+                if roots.isEmpty && meanings.isEmpty && forms.isEmpty {
                     Text("No shared roots or meanings among these words yet. Add a few related "
                          + "words — the same word in other languages works well.")
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -328,6 +338,7 @@ struct StoryList: View {
                 }
                 ForEach(roots) { rootCard($0) }
                 ForEach(meanings) { meaningCard($0) }
+                ForEach(forms) { formCard($0) }
                 if !loose.isEmpty {
                     footnote("Nothing in common with the other words yet", loose)
                 }
@@ -395,6 +406,38 @@ struct StoryList: View {
         .accessibilityIdentifier("meaningCard")
     }
 
+    /// Forms of one word (invitato, invitare): no shared root to tell, since they share
+    /// every ancestor. Tapping opens the word's lineage.
+    private func formCard(_ group: FormGroup) -> some View {
+        let lemma = response.node(group.lemma)
+        let base = group.words.filter {
+            response.words[$0].text.lowercased() == lemma?.word.lowercased()
+        }
+        let forms = group.words.filter { !base.contains($0) }
+        let sentence: Text = base.isEmpty
+            ? Text("\(Self.list(forms.map { word($0) })) are forms of the same word, \(ancestor(lemma))")
+            : Text("\(Self.list(forms.map { word($0) })) \(forms.count == 1 ? "is a form" : "are forms") of \(word(base[0]))")
+        return Button { onSelect(.term(group.lemma)) } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Same word", systemImage: "equal.square")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline) {
+                    sentence.font(.body)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+                Text("Same ancestors all the way up: tap for the lineage")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color.gray.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("formCard")
+    }
+
     private func footnote(_ title: String, _ words: [Int]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
@@ -447,6 +490,19 @@ struct StoryList: View {
         return groups.values
             .map { var g = $0; g.words.sort(); return g }
             .sorted { ($0.words.count, -$0.distance) > ($1.words.count, -$1.distance) }
+    }
+
+    /// Same-word links grouped by the entry they are forms of.
+    static func formGroups(_ r: SceneResponse) -> [FormGroup] {
+        var groups: [Int: FormGroup] = [:]
+        var order: [Int] = []
+        for link in r.sameWordLinks {
+            if groups[link.lemma] == nil { order.append(link.lemma) }
+            var g = groups[link.lemma] ?? FormGroup(lemma: link.lemma, words: [])
+            for w in [link.a, link.b] where !g.words.contains(w) { g.words.append(w) }
+            groups[link.lemma] = g
+        }
+        return order.compactMap { groups[$0] }.map { var g = $0; g.words.sort(); return g }
     }
 
     /// Same-meaning links grouped by meaning, leaving out those already told by a root

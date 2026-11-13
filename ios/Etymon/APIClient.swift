@@ -39,7 +39,7 @@ struct APIClient {
     }
 
     /// `wordLanguages`: a language for each word where it is known (spoken words), else nil.
-    func scene(words: [String], lang: String?, maxCost: Double = SearchDepth.defaultValue,
+    func scene(words: [String], lang: String?, maxCost: Double? = nil,
                wordLanguages: [String?] = []) async throws -> SceneResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("scene"))
         request.httpMethod = "POST"

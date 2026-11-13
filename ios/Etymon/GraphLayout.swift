@@ -125,10 +125,11 @@ struct GraphLayout {
         width = max((xs.max() ?? 0) - minX, 1)
     }
 
-    /// Every pair of related scene words: shared ancestry first (by distance), then
-    /// same meaning.
+    /// Every pair of related scene words: forms of one word first (side by side), shared
+    /// ancestry (by distance), then same meaning.
     static func pairs(_ response: SceneResponse) -> [(a: Int, b: Int, distance: Double)] {
-        response.connections.map { ($0.a, $0.b, $0.distance) }
+        response.sameWordLinks.map { ($0.a, $0.b, 0) }
+            + response.connections.map { ($0.a, $0.b, $0.distance) }
             + response.semanticLinks.map { ($0.a, $0.b, 1000) }
     }
 

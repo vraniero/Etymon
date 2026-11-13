@@ -6,6 +6,7 @@ struct HomeView: View {
     @State private var showLibrary = false
     @State private var showHelp = false
     @State private var showSettings = false
+    @State private var showGames = LaunchOptions.game != nil
     @State private var appeared = false
 
     var body: some View {
@@ -26,6 +27,7 @@ struct HomeView: View {
         .sheet(isPresented: $showLibrary) { LibraryView() }
         .sheet(isPresented: $showHelp) { HelpView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .fullScreenCover(isPresented: $showGames) { GamesView(start: LaunchOptions.game) }
         .onAppear { withAnimation(.spring(duration: 0.8).delay(0.2)) { appeared = true } }
     }
 
@@ -74,11 +76,16 @@ struct HomeView: View {
                     .accessibilityIdentifier("home-\(source.rawValue)")
                     .modifier(Arrive(shown: appeared, index: i))
             }
+            ModeCard(symbol: "gamecontroller", title: "Games",
+                     text: "Root Chain, Impostor, Cousin Hunt, Birthplace, Scavenger: play with the roots.",
+                     color: IconPalette.blue) { showGames = true }
+                .accessibilityIdentifier("homeGames")
+                .modifier(Arrive(shown: appeared, index: ContentView.Source.available.count))
             ModeCard(symbol: "books.vertical", title: "My network",
                      text: "Everything you saved, offline: as a list, on a map, as one network.",
                      color: IconPalette.coral) { showLibrary = true }
                 .accessibilityIdentifier("homeLibrary")
-                .modifier(Arrive(shown: appeared, index: ContentView.Source.available.count))
+                .modifier(Arrive(shown: appeared, index: ContentView.Source.available.count + 1))
         }
     }
 }

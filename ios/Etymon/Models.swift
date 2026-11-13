@@ -303,3 +303,83 @@ struct NeighborsResponse: Codable {
         case totalChildren = "total_children"
     }
 }
+
+/// Root Chain's move by the app, from POST /chain/reply.
+struct ChainReplyRequest: Encodable {
+    let word: SceneRequest.Word
+    let used: [String]
+    let avoidRoot: Int?
+    let level: String
+    let lang: String?  // the game's language: the app plays only in it
+
+    enum CodingKeys: String, CodingKey {
+        case word, used, level, lang
+        case avoidRoot = "avoid_root"
+    }
+}
+
+struct ChainReply: Codable {
+    let text: String
+    let lang: String
+    let meet: Int
+}
+
+// The word games besides Root Chain (backend/games.py).
+
+struct GameWord: Codable, Hashable {
+    let text: String
+    let lang: String
+    let language: String
+}
+
+/// Impostor: three words share `root`, the one at `impostor` only looks like them
+/// ("looks") or means the same as one ("means").
+struct ImpostorPuzzle: Codable {
+    let words: [GameWord]
+    let impostor: Int
+    let root: Int
+    let why: String
+    let paths: [[Int]]  // each word up to the root; the impostor's own line
+    let nodes: [String: Node]
+    func node(_ id: Int) -> Node? { nodes[String(id)] }
+}
+
+/// Cousin Hunt and Scavenger: an ancestor with many living descendants.
+struct GameRoot: Codable {
+    let root: Node
+    let lang: String
+    let total: Int
+    let examples: [String]
+}
+
+struct GameCheckRequest: Encodable {
+    let root: Int
+    let words: [SceneRequest.Word]
+}
+
+struct GameCheck: Codable {
+    struct Found: Codable, Hashable {
+        let text: String
+        let lang: String?
+        let path: [Int]  // the word up to the root
+    }
+    let found: [Found]
+    let unknown: [String]
+    let nodes: [String: Node]
+    func node(_ id: Int) -> Node? { nodes[String(id)] }
+}
+
+/// Birthplace: a word and where it was born, with the way it came.
+struct BirthplacePuzzle: Codable {
+    let word: GameWord
+    let born: Int
+    let journey: [Int]
+    let km: Double
+    let nodes: [String: Node]
+    func node(_ id: Int) -> Node? { nodes[String(id)] }
+}
+
+struct ChainStart: Codable {
+    let text: String
+    let lang: String
+}

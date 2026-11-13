@@ -413,3 +413,13 @@ def neighbors(id: int, children: int = Query(16, ge=0, le=60),
 from listen import router as listen_router  # noqa: E402
 
 app.include_router(listen_router)
+
+# Root Chain, the word game (POST /chain/reply): the app's move.
+from chain import router as chain_router  # noqa: E402
+
+app.include_router(chain_router)
+
+# The other word games: Impostor, Cousin Hunt, Scavenger, Birthplace.
+from games import router as games_router  # noqa: E402
+
+app.include_router(games_router)

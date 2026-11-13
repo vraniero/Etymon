@@ -73,6 +73,61 @@ struct APIClient {
         return try await send(request)
     }
 
+    /// Root Chain: the app's next word after `word`; 404 when it has none left.
+    func chainReply(after word: String, lang: String?, used: [String], avoidRoot: Int?,
+                    level: String, in language: String? = nil) async throws -> ChainReply {
+        var request = URLRequest(url: baseURL.appendingPathComponent("chain/reply"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try JSONEncoder().encode(ChainReplyRequest(
+            word: .init(text: word, lang: lang), used: used, avoidRoot: avoidRoot, level: level,
+            lang: language))
+        return try await send(request)
+    }
+
+    // MARK: games
+
+    /// Root Chain's opening word in a language.
+    func chainStart(lang: String) async throws -> ChainStart {
+        try await get("chain/start", ["lang": lang])
+    }
+
+    func impostor(lang: String?) async throws -> ImpostorPuzzle {
+        try await get("games/impostor", ["lang": lang, "seed": Self.fresh])
+    }
+
+    func gameRoot(lang: String?) async throws -> GameRoot {
+        try await get("games/root", ["lang": lang, "seed": Self.fresh])
+    }
+
+    func birthplace(lang: String?) async throws -> BirthplacePuzzle {
+        try await get("games/birthplace", ["lang": lang, "seed": Self.fresh])
+    }
+
+    /// Which of the words descend from the root.
+    func check(root: Int, words: [String], lang: String?) async throws -> GameCheck {
+        var request = URLRequest(url: baseURL.appendingPathComponent("games/check"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        request.httpBody = try JSONEncoder().encode(GameCheckRequest(
+            root: root, words: words.map { .init(text: $0, lang: lang) }))
+        return try await send(request)
+    }
+
+    /// A seed per puzzle: a new one each time, and no two cached answers alike.
+    private static var fresh: String? { String(Int.random(in: 0..<1_000_000_000)) }
+
+    private func get<T: Decodable>(_ path: String, _ query: [String: String?]) async throws -> T {
+        var components = URLComponents(url: baseURL.appendingPathComponent(path),
+                                       resolvingAgainstBaseURL: false)!
+        components.queryItems = query.compactMap { k, v in v.map { URLQueryItem(name: k, value: $0) } }
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 30  // a language's first puzzle reads its common words
+        return try await send(request)
+    }
+
     /// Lookups (GET) are kept on the device: when the server can't be reached, the last
     /// answer for the same question is used, so saved networks can be explored offline.
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {

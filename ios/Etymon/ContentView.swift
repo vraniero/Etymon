@@ -439,6 +439,10 @@ enum LaunchOptions {
     }
     static var photoPath: String? { value(after: "-photo") }
     static var isDemo: Bool { ProcessInfo.processInfo.arguments.contains("-demo") }
+    /// `-game chain|impostor|hunt|birthplace|scavenger`: open that game from the home
+    /// screen on launch (screenshots, UI checks); `-chainStart father` sets Root Chain's
+    /// opening word.
+    static var game: Game? { value(after: "-game").flatMap(Game.init(rawValue:)) }
     /// `-text "invitare invitato"`: Type connects these words on launch (UI checks).
     static var typedText: String? { value(after: "-text") }
 }

@@ -48,13 +48,52 @@ final class ChainTests: XCTestCase {
         XCTAssertEqual(judge(scene(second: "qwzxv", terms: [], linked: false)), .unknown)
     }
 
+    /// A pass costs nothing yet; when everyone has passed on a word it's a dead end:
+    /// still nobody loses a life, and a new word is drawn.
     @MainActor
-    func testPassCostsALifeAndTheTurn() {
+    func testDeadEndDrawsANewWordAndCostsNothing() async throws {
         let game = ChainGame(opponent: .friend, start: "father")
         game.pass()
-        XCTAssertEqual(game.players[0].lives, ChainRules.lives - 1)
         XCTAssertEqual(game.turn, 1)
-        game.pass(); game.pass(); game.pass(); game.pass()
-        XCTAssertEqual(game.winner, 1)  // player 1 ran out first
+        XCTAssertEqual(game.players[0].lives, ChainRules.lives)
+        game.pass()
+        for _ in 0..<150 where game.moves.count < 2 { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertEqual(game.moves.count, 2, "a new word after the dead end")
+        XCTAssertNotNil(game.moves[1].note)
+        XCTAssertNotEqual(game.moves[1].text, "father")
+        XCTAssertEqual(game.players.map(\.lives), [ChainRules.lives, ChainRules.lives])
+        XCTAssertNil(game.winner)
+    }
+}
+
+/// Up to six: turns go round; Etymon joins after the people.
+final class ChainPlayersTests: XCTestCase {
+    @MainActor
+    func testSixPlayersTakeTurns() {
+        let names = ["A", "B", "C", "D", "E", "F", "G"]
+        let game = ChainGame(opponent: .friend, names: names, start: "father")
+        XCTAssertEqual(game.players.count, 6, "six at most")
+        for expected in [1, 2, 3, 4, 5] {
+            game.pass()
+            XCTAssertEqual(game.turn, expected)
+        }
+        XCTAssertTrue(game.players.allSatisfy { $0.lives == ChainRules.lives })
+    }
+
+    @MainActor
+    func testEtymonJoinsAfterThePeople() {
+        let game = ChainGame(opponent: .app(.easy), names: ["A", "B", "C", "D", "E", "F"], start: "father")
+        XCTAssertEqual(game.players.map(\.name), ["A", "B", "C", "D", "E", "Etymon"])
+        XCTAssertTrue(game.players.last!.isApp)
+    }
+}
+
+/// The games' languages: all twenty, the Cyrillic ones among them, named in the phone's language.
+final class GameLanguageTests: XCTestCase {
+    func testNames() {
+        XCTAssertEqual(GameLanguage.name("uk"), TalkCaption.name("uk"))
+        XCTAssertEqual(GameLanguage.name(nil), "Any language")
+        XCTAssertEqual(GameLanguage.all.count, 20)
+        for code in ["ru", "uk", "be", "bg", "mk", "sh"] { XCTAssertTrue(GameLanguage.all.contains(code)) }
     }
 }

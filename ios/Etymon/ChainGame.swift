@@ -65,7 +65,7 @@ enum ChainRules {
     }
 }
 
-/// Who plays: two people on one phone, or one person against the app.
+/// Who plays besides the people on the phone: Etymon at a level, or nobody.
 enum ChainOpponent: Hashable {
     case app(ChainLevel)
     case friend
@@ -91,18 +91,20 @@ struct ChainPlayer: Identifiable {
     let isApp: Bool
     var score = 0
     var lives = ChainRules.lives
+    var isOut: Bool { lives <= 0 }
 }
 
 /// One word in the chain, and the link that joined it to the word before.
 struct ChainMove: Identifiable {
     let id = UUID()
-    let player: Int?  // nil: the opening word
+    let player: Int?  // nil: the opening word, or a new one after a dead end
     let text: String
     let lang: String?
     let language: String?  // its name
     let link: Connection?
     let points: Int
     let scene: SceneResponse?  // [previous word, this word], for drawing the link
+    var note: String? = nil  // shown above the word: why a new one was drawn
 }
 
 @MainActor @Observable
@@ -121,22 +123,30 @@ final class ChainGame {
     private let chimes = Chimes()
     private var played: Set<String> = []
     private var playedTerms: Set<Int> = []
+    /// Who couldn't go on from the current word (passed, missed, or Etymon found nothing).
+    /// All of them: a dead end. Those who passed lose a life only once someone goes on.
+    private var stuck: Set<Int> = []
+    private var owing: Set<Int> = []
 
+    nonisolated static let maxPlayers = 6
+
+    /// `names`: the people taking turns on the phone, in order; Etymon joins last when
+    /// it plays. Up to six in all.
     init(opponent: ChainOpponent, names: [String] = ["You", "Friend"],
          start: String = ChainRules.starters.randomElement()!, startLang: String = "en",
          language: String? = nil) {
         self.opponent = opponent
         self.language = language
-        switch opponent {
-        case .app:
-            players = [ChainPlayer(id: 0, name: names[0], color: IconPalette.mint, isApp: false),
-                       ChainPlayer(id: 1, name: "Etymon", color: IconPalette.gold, isApp: true)]
-        case .friend:
-            players = [ChainPlayer(id: 0, name: names[0], color: IconPalette.mint, isApp: false),
-                       ChainPlayer(id: 1, name: names[1], color: IconPalette.violet, isApp: false)]
+        let room = Self.maxPlayers - (opponent == .friend ? 0 : 1)
+        players = names.prefix(room).enumerated().map { i, name in
+            ChainPlayer(id: i, name: name, color: PlayerColors.color(i), isApp: false)
+        }
+        if case .app = opponent {
+            players.append(ChainPlayer(id: players.count, name: "Etymon", color: IconPalette.gold,
+                                       isApp: true))
         }
         moves = [ChainMove(player: nil, text: start, lang: startLang,
-                           language: TalkCaption.name(startLang), link: nil,
+                           language: GameLanguage.name(startLang), link: nil,
                            points: 0, scene: nil)]
         played = [start.lowercased()]
     }
@@ -161,10 +171,28 @@ final class ChainGame {
         await attempt(word, lang: language)
     }
 
-    /// Give up this turn: costs a life, and the other player goes on from the same word.
+    /// Give up this turn: the next player goes on from the same word. It costs a life
+    /// only if someone does go on — that shows there was a word; if nobody can, it's a
+    /// dead end, nobody loses, and a new word is drawn.
     func pass() {
         guard !busy, !isOver else { return }
-        miss("\(current.name) passed.")
+        passTurn("\(current.name) passed.")
+    }
+
+    private func passTurn(_ why: String) {
+        message = why
+        stuck.insert(turn)
+        owing.insert(turn)
+        if deadEnd {
+            Task { await newWord() }
+        } else {
+            nextTurn()
+        }
+    }
+
+    /// Everyone still in has been stuck on this word.
+    private var deadEnd: Bool {
+        players.filter { !$0.isOut }.allSatisfy { stuck.contains($0.id) }
     }
 
     private func attempt(_ word: String, lang: String?) async {
@@ -199,25 +227,87 @@ final class ChainGame {
         played.insert(new.key)
         playedTerms.formUnion(new.terms)
         chimes.play(.root)
+        // there was a word after all: those who passed on it pay now
+        let payers = owing.subtracting([turn]).sorted()
+        stuck = []
+        owing = []
+        if !payers.isEmpty {
+            withAnimation { for p in payers { players[p].lives -= 1 } }
+            let names = payers.map { players[$0].name }
+            message = "There was a word: \(names.joined(separator: ", ")) \(names.count == 1 ? "loses" : "lose") a life."
+            let out = payers.filter { players[$0].isOut }.map { players[$0].name }
+            if !out.isEmpty { message! += " \(out.joined(separator: ", ")) out." }
+        }
         if players[turn].score >= ChainRules.target {
             winner = turn
+        } else if let last = lastStanding {
+            winner = last
         } else {
             nextTurn()
         }
     }
 
+    private var lastStanding: Int? {
+        let left = players.filter { !$0.isOut }
+        return left.count == 1 ? left[0].id : nil
+    }
+
+    /// Nobody could go on: a fresh word, nobody loses a life for passing on the old one.
+    private func newWord() async {
+        busy = true
+        defer { busy = false }
+        var word: String?
+        var lang = language ?? "en"
+        if language == nil || language == "en" {
+            word = ChainRules.starters.filter { !played.contains($0) }.randomElement()
+        }
+        if word == nil, let reply = try? await api.chainStart(lang: lang),
+           !played.contains(reply.text.lowercased()) {
+            word = reply.text
+            lang = reply.lang
+        }
+        guard let word else {
+            // nothing new to draw: the best score wins
+            winner = players.filter { !$0.isOut }.max { $0.score < $1.score }?.id
+            message = "Dead end, and no new word to draw."
+            return
+        }
+        stuck = []
+        owing = []
+        withAnimation(.spring(duration: 0.5)) {
+            moves.append(ChainMove(player: nil, text: word, lang: lang,
+                                   language: GameLanguage.name(lang), link: nil, points: 0,
+                                   scene: nil, note: "Dead end — nobody could go on. A new word:"))
+        }
+        played.insert(word.lowercased())
+        if let entry = try? await api.word(word, lang: lang) {
+            playedTerms.formUnion(entry.entries.map(\.term))
+        }
+        message = nil
+        nextTurn()
+    }
+
+    /// A wrong word costs a life at once; with none left the player is out, and the last
+    /// one in wins. It also counts as stuck on this word, for a dead end.
     private func miss(_ why: String) {
         message = why
         withAnimation { players[turn].lives -= 1 }
-        if players[turn].lives <= 0 {
-            winner = 1 - turn
+        if players[turn].isOut {
+            message = why + " \(current.name) is out."
+        }
+        stuck.insert(turn)
+        if let last = lastStanding {
+            winner = last
+        } else if deadEnd {
+            Task { await newWord() }
         } else {
             nextTurn()
         }
     }
 
+    /// The next player still in.
     private func nextTurn() {
-        turn = 1 - turn
+        repeat { turn = (turn + 1) % players.count } while players[turn].isOut
         if current.isApp {
             Task { await appMove() }
         }
@@ -236,14 +326,14 @@ final class ChainGame {
         if pause > 0 { try? await Task.sleep(for: .seconds(pause)) }
         busy = false
         guard let reply else {
-            miss("Etymon couldn't find a word, and passed.")
+            passTurn("Etymon couldn't find a word, and passed.")
             return
         }
         let before = moves.count
         await attempt(reply.text, lang: reply.lang)
         // its word came back unknown (offline, or a word the scene reads differently)
         if moves.count == before, current.isApp, !isOver {
-            miss("Etymon's word didn't hold up, and it passed.")
+            passTurn("Etymon's word didn't hold up, and it passed.")
         }
     }
 }

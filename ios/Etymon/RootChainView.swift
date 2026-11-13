@@ -22,8 +22,8 @@ struct RootChainView: View {
     /// Opening word: one of the starters in English (or any language), else one the
     /// backend picks in the game's language.
     private func start() {
-        let names = [setup.firstName.isEmpty ? (setup.vsApp ? "You" : "Player 1") : setup.firstName,
-                     setup.secondName.isEmpty ? "Player 2" : setup.secondName]
+        let names = PlayerNames.resolved(setup.names, count: setup.people,
+                                         first: setup.vsApp && setup.people == 1 ? "You" : "Player 1")
         let lang = GameLanguage.current
         starting = true
         error = nil
@@ -53,8 +53,17 @@ struct RootChainView: View {
 struct ChainSetup {
     var vsApp = true
     var level = ChainLevel.easy
-    var firstName = ""
-    var secondName = ""
+    var names: [String] = []
+    private var chosen = 1  // people on the phone, as last set
+
+    /// People taking turns on the phone: 1–5 with Etymon, 2–6 without.
+    var people: Int {
+        get { min(max(chosen, range.lowerBound), range.upperBound) }
+        set { chosen = newValue }
+    }
+    var range: ClosedRange<Int> {
+        vsApp ? 1...(ChainGame.maxPlayers - 1) : 2...ChainGame.maxPlayers
+    }
 }
 
 private struct ChainSetupView: View {
@@ -83,11 +92,14 @@ private struct ChainSetupView: View {
                         .pickerStyle(.segmented)
                         Text(setup.level.blurb).font(.caption).foregroundStyle(.secondary)
                     }
-                } else {
-                    VStack(spacing: 10) {
-                        TextField("Player 1", text: $setup.firstName).nameField(IconPalette.mint)
-                        TextField("Player 2", text: $setup.secondName).nameField(IconPalette.violet)
-                    }
+                }
+                Stepper(value: $setup.people, in: setup.range) {
+                    Text(setup.vsApp ? "\(setup.people) \(setup.people == 1 ? "person" : "people") + Etymon"
+                         : "\(setup.people) players")
+                }
+                .accessibilityIdentifier("chainPlayers")
+                if setup.people > 1 || !setup.vsApp {
+                    PlayerNames(names: $setup.names, count: setup.people)
                 }
 
                 GameLanguagePicker(language: $language)
@@ -131,15 +143,6 @@ private struct ChainSetupView: View {
     }
 }
 
-private extension View {
-    func nameField(_ color: Color) -> some View {
-        textInputAutocapitalization(.words)
-            .padding(12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(color.opacity(0.6)))
-    }
-}
-
 /// The game: scores at the top, the chain in the middle, the next word at the bottom.
 private struct ChainBoard: View {
     let game: ChainGame
@@ -172,6 +175,9 @@ private struct ChainBoard: View {
                 .onChange(of: game.moves.count) {
                     withAnimation { reader.scrollTo(game.last.id, anchor: .bottom) }
                 }
+                .onChange(of: game.turn) {
+                    if !game.current.isApp && !game.isOver { typing = true }
+                }
             }
             if game.isOver { result } else { input }
         }
@@ -181,24 +187,29 @@ private struct ChainBoard: View {
         move.player.map { game.players[$0].color } ?? .white
     }
 
+    /// Two players side by side; more in rows of three, smaller.
     private var scores: some View {
-        HStack(spacing: 10) {
+        let compact = game.players.count > 2
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                        count: compact ? 3 : 2), spacing: 8) {
             ForEach(game.players) { player in
                 let active = player.id == game.turn && !game.isOver
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(player.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Spacer(minLength: 4)
+                        Text(player.name).font((compact ? Font.caption : .subheadline).weight(.semibold))
+                            .lineLimit(1)
+                            .strikethrough(player.isOut)
+                        Spacer(minLength: 2)
                         HStack(spacing: 2) {
                             ForEach(0..<ChainRules.lives, id: \.self) { i in
                                 Image(systemName: i < player.lives ? "heart.fill" : "heart")
-                                    .font(.caption2)
+                                    .font(.system(size: compact ? 8 : 11))
                                     .foregroundStyle(i < player.lives ? IconPalette.coral : .white.opacity(0.3))
                             }
                         }
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text("\(player.score)").font(.title2.weight(.bold).monospacedDigit())
+                        Text("\(player.score)").font((compact ? Font.headline : .title2).weight(.bold).monospacedDigit())
                             .contentTransition(.numericText())
                         Text("/ \(ChainRules.target)").font(.caption).foregroundStyle(.secondary)
                     }
@@ -206,7 +217,8 @@ private struct ChainBoard: View {
                                  total: Double(ChainRules.target))
                         .tint(player.color)
                 }
-                .padding(10)
+                .padding(compact ? 7 : 10)
+                .opacity(player.isOut ? 0.45 : 1)
                 .background(player.color.opacity(active ? 0.22 : 0.06), in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14)
                     .strokeBorder(player.color.opacity(active ? 0.9 : 0.2), lineWidth: active ? 1.5 : 1))
@@ -224,39 +236,40 @@ private struct ChainBoard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("chainMessage")
             }
-            if game.current.isApp {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text("Etymon is thinking…").foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 44)
-            } else {
-                Text("\(game.current.name), a word linked to “\(game.last.text)”")
+            // The field stays put whoever's turn it is (swapping it out for Etymon's turn
+            // once left the screen stuck on "thinking"); only the line above it changes.
+            let appTurn = game.current.isApp
+            HStack(spacing: 8) {
+                if appTurn { ProgressView().controlSize(.small) }
+                Text(appTurn ? "Etymon is thinking…"
+                     : "\(game.current.name), a word linked to “\(game.last.text)”")
                     .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
-                    TextField(GameLanguage.name(game.language), text: $text)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.go)
-                        .focused($typing)
-                        .onSubmit(submit)
-                        .padding(.horizontal, 12).padding(.vertical, 10)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(game.current.color.opacity(0.7)))
-                        .accessibilityIdentifier("chainWord")
-                    Button(action: submit) {
-                        if game.busy { ProgressView() } else { Image(systemName: "arrow.up.circle.fill").font(.title) }
-                    }
-                    .tint(game.current.color)
-                    .disabled(game.busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityLabel("Play").accessibilityIdentifier("chainPlay")
-                    Button("Pass") { game.pass() }
-                        .buttonStyle(.bordered)
-                        .disabled(game.busy)
-                        .accessibilityIdentifier("chainPass")
+                    .accessibilityIdentifier("chainTurn")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                TextField(GameLanguage.name(game.language), text: $text)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .focused($typing)
+                    .onSubmit(submit)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(game.current.color.opacity(0.7)))
+                    .disabled(appTurn)
+                    .accessibilityIdentifier("chainWord")
+                Button(action: submit) {
+                    if game.busy && !appTurn { ProgressView() } else { Image(systemName: "arrow.up.circle.fill").font(.title) }
                 }
+                .tint(game.current.color)
+                .disabled(appTurn || game.busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
+                .accessibilityLabel("Play").accessibilityIdentifier("chainPlay")
+                Button("Pass") { game.pass() }
+                    .buttonStyle(.bordered)
+                    .disabled(appTurn || game.busy)
+                    .accessibilityIdentifier("chainPass")
             }
         }
         .padding()
@@ -270,8 +283,8 @@ private struct ChainBoard: View {
             if game.moves.last?.text.lowercased() == word.trimmingCharacters(in: .whitespaces).lowercased() {
                 text = ""
             }
-            // pass and play: the phone changes hands, keep the keyboard; against the app, too
-            typing = true
+            // pass and play: the phone changes hands, keep the keyboard
+            if !game.current.isApp { typing = true }
         }
     }
 
@@ -302,6 +315,16 @@ private struct WordCard: View {
     let isLast: Bool
 
     var body: some View {
+        VStack(spacing: 6) {
+            if let note = move.note {
+                Text(note).font(.caption).foregroundStyle(IconPalette.coral)
+                    .padding(.top, 14)
+            }
+            card
+        }
+    }
+
+    private var card: some View {
         VStack(spacing: 2) {
             Text(move.text)
                 .font(.system(size: isLast ? 30 : 24, weight: .regular, design: .serif))

@@ -88,9 +88,9 @@ enum Game: String, CaseIterable, Identifiable, Hashable {
 
     var players: String {
         switch self {
-        case .chain: "1–2 players"
-        case .impostor, .birthplace, .scavenger: "Solo"
-        case .hunt: "1–2 players"
+        case .chain: "1–6 players"
+        case .impostor, .birthplace, .scavenger: "1–6 players"
+        case .hunt: "1–6 players"
         }
     }
 
@@ -115,13 +115,14 @@ enum GameLanguage {
         return stored.isEmpty ? nil : stored
     }
 
+    /// In the phone's language, as elsewhere in the app.
     static func name(_ code: String?) -> String {
         code.map(TalkCaption.name) ?? "Any language"
     }
 
     /// The twenty, by name.
     static var all: [String] {
-        WordExtractor.languages.sorted { TalkCaption.name($0) < TalkCaption.name($1) }
+        WordExtractor.languages.sorted { name($0) < name($1) }
     }
 }
 
@@ -134,7 +135,7 @@ struct GameLanguagePicker: View {
             Spacer()
             Picker("Language", selection: $language) {
                 Text("Any language").tag("")
-                ForEach(GameLanguage.all, id: \.self) { Text(TalkCaption.name($0)).tag($0) }
+                ForEach(GameLanguage.all, id: \.self) { Text(GameLanguage.name($0)).tag($0) }
             }
             .pickerStyle(.menu)
             .tint(IconPalette.gold)
@@ -180,6 +181,123 @@ private struct GameCard: View {
 }
 
 // MARK: shared by the games
+
+/// One color per player, up to six (Etymon itself plays in gold).
+enum PlayerColors {
+    static let all = [IconPalette.mint, IconPalette.violet, IconPalette.sky, IconPalette.coral,
+                      IconPalette.lavender, IconPalette.blue]
+    static func color(_ i: Int) -> Color { all[i % all.count] }
+}
+
+/// How many play on one phone, and their names: 1–6.
+struct PlayersSetup: View {
+    @Binding var count: Int
+    @Binding var names: [String]
+    /// What several players do, under the stepper.
+    let how: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Stepper(value: $count, in: 1...6) {
+                Text(count == 1 ? "Solo" : "\(count) players")
+            }
+            .accessibilityIdentifier("players")
+            if count > 1 {
+                Text(how).font(.caption).foregroundStyle(.secondary)
+                PlayerNames(names: $names, count: count)
+            }
+        }
+    }
+}
+
+/// Between two players' turns on one phone: hand it over, the next one taps when ready.
+struct HandOff: View {
+    let name: String
+    let color: Color
+    var note = "The others look away!"
+    let ready: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+                .font(.system(size: 44)).foregroundStyle(color)
+            Text("Pass the phone to").foregroundStyle(.secondary)
+            Text(name).font(.system(size: 34, design: .serif)).foregroundStyle(color)
+            Text(note).font(.caption).foregroundStyle(.secondary)
+            Button("I'm \(name) — ready", action: ready)
+                .buttonStyle(.borderedProminent).tint(color).foregroundStyle(IconPalette.navy)
+                .accessibilityIdentifier("handOffReady")
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .padding()
+    }
+}
+
+/// Final scores, best first.
+struct Leaderboard: View {
+    let names: [String]
+    let scores: [Int]
+    var unit = "points"
+
+    var body: some View {
+        let order = scores.indices.sorted { scores[$0] > scores[$1] }
+        let best = scores.max() ?? 0
+        VStack(spacing: 10) {
+            let winners = order.filter { scores[$0] == best }
+            Text(winners.count == 1 ? "\(names[winners[0]]) wins" : "A draw")
+                .font(.system(.title, design: .serif))
+                .accessibilityIdentifier("winner")
+            ForEach(order, id: \.self) { p in
+                HStack {
+                    Circle().fill(PlayerColors.color(p)).frame(width: 10)
+                    Text(names[p])
+                    Spacer()
+                    Text("\(scores[p]) \(unit)").monospacedDigit()
+                        .foregroundStyle(PlayerColors.color(p))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+}
+
+/// Up to six names, one field each, in the player's color.
+struct PlayerNames: View {
+    @Binding var names: [String]
+    let count: Int
+    var first = "Player"
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(0..<count, id: \.self) { i in
+                TextField(i == 0 ? first : "Player \(i + 1)", text: binding(i))
+                    .textInputAutocapitalization(.words)
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(PlayerColors.color(i).opacity(0.7)))
+            }
+        }
+    }
+
+    private func binding(_ i: Int) -> Binding<String> {
+        Binding(get: { i < names.count ? names[i] : "" }, set: { value in
+            while names.count <= i { names.append("") }
+            names[i] = value
+        })
+    }
+
+    /// The names typed, or "Player n" where none was.
+    static func resolved(_ names: [String], count: Int, first: String = "Player 1") -> [String] {
+        (0..<count).map { i in
+            let typed = i < names.count ? names[i].trimmingCharacters(in: .whitespaces) : ""
+            return typed.isEmpty ? (i == 0 ? first : "Player \(i + 1)") : typed
+        }
+    }
+}
 
 extension View {
     /// The navy field with the icon's tree, faint.

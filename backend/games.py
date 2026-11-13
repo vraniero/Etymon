@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import app as api
-from chain import common_words, descend, plain
+from chain import common_words, descend, frequency, plain, script
 from connect import MAX_COST, climb, lineage, meetings, path
 from query import MODERN
 
@@ -85,7 +85,7 @@ def impostor(lang: str | None = None, seed: int | None = None,
                 continue  # de, ad: a function word, not a family
             seen = {tid}
             below = descend(db, anc, seen, lambda w, l, z: l == lang and z >= 2.5
-                            and w.lower() != word.lower())
+                            and w.lower() != word.lower() and script(w) == script(word))
             cousins = distinct(db, lang, [tid] + list(below), 3)
             if len(cousins) < 3:
                 continue
@@ -132,7 +132,13 @@ def disguise(db, lang, cousins, trees, rng):
         if api.resolve(db, lang, word) != [t]:
             return False
         mine = climb(db, [t], MAX_COST)
-        return len(mine) > 1 and all(not meetings(mine, tree, 1) for tree in trees.values())
+        # its ancestry must go back past the modern languages: one that stops at
+        # agresivo (es) only looks unrelated to agredir because the data runs out
+        older = db.execute(
+            f"SELECT 1 FROM term WHERE id IN ({','.join('?' * len(mine))}) "
+            f"AND lang NOT IN ({','.join('?' * len(MODERN))}) LIMIT 1",
+            (*mine, *MODERN)).fetchone()
+        return bool(older) and all(not meetings(mine, tree, 1) for tree in trees.values())
 
     for c in rng.sample(cousins, len(cousins)):
         word = db.execute("SELECT word FROM term WHERE id=?", (c,)).fetchone()[0]
@@ -140,11 +146,12 @@ def disguise(db, lang, cousins, trees, rng):
             if len(word) <= size:
                 continue
             rows = db.execute(
-                "SELECT id, word FROM term WHERE lang=? AND word LIKE ? AND has_entry=1 "
-                "AND coalesce(zipf, 0) >= 2.5 AND id != ? ORDER BY random() LIMIT 12",
+                "SELECT id, word, zipf FROM term WHERE lang=? AND word LIKE ? AND has_entry=1 "
+                "AND id != ? ORDER BY random() LIMIT 40",
                 (lang, word[:size] + "%", c)).fetchall()
-            for t, w in rows:
-                if plain(w) and t not in cousins and unrelated(t, w):
+            for t, w, z in rows:
+                if (frequency(db, t, lang, z or 0) >= 2.5 and plain(w) and t not in cousins
+                        and unrelated(t, w)):
                     return t, "looks"
         rows = db.execute(
             "SELECT m2.term FROM meaning m1 JOIN meaning m2 ON m2.key=m1.key "
@@ -152,7 +159,7 @@ def disguise(db, lang, cousins, trees, rng):
             "AND t.has_entry=1 LIMIT 12", (c, lang, c)).fetchall()
         for (t,) in rows:
             w = db.execute("SELECT word FROM term WHERE id=?", (t,)).fetchone()[0]
-            if plain(w) and t not in cousins and unrelated(t, w):
+            if plain(w) and script(w) == script(word) and t not in cousins and unrelated(t, w):
                 return t, "means"
     return None, ""
 
@@ -190,6 +197,8 @@ def root(lang: str | None = None, seed: int | None = None,
                             generations=4)
             if len(below) >= MIN_DESCENDANTS:
                 examples = sorted(below.values(), key=lambda v: -v[2])
+                # Serbo-Croatian: the examples in one script, the commonest one's
+                examples = [e for e in examples if script(e[0]) == script(examples[0][0])]
                 api.log.info(f"{api._c('1;33', 'root ')}  {node.word} ({node.language}) "
                              f"{len(below)} in {lang}")
                 return RootOut(root=node, lang=lang, total=len(below),

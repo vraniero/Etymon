@@ -1,17 +1,19 @@
 import SwiftUI
 
 /// Cousin Hunt: an ancient root, sixty seconds, name as many of its living descendants as
-/// you can. Solo, or two players on one phone, one after the other on the same root.
+/// you can. Solo, or up to six players on one phone, one after another on the same root.
 struct HuntView: View {
     static let seconds = 60
 
     enum Phase: Equatable { case setup, ready(Int), playing(Int), results }
 
     @State private var phase = Phase.setup
+    static let maxPlayers = 6
     @State private var players = 1
+    @State private var names: [String] = []
     @State private var root: GameRoot?
     @State private var error: String?
-    @State private var found: [[GameCheck.Found]] = [[], []]
+    @State private var found: [[GameCheck.Found]] = Array(repeating: [], count: Self.maxPlayers)
     @State private var nodes: [Int: Node] = [:]
     @State private var text = ""
     @State private var message: String?
@@ -36,11 +38,11 @@ struct HuntView: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Name the cousins").font(.system(.title2, design: .serif))
             Text("You'll get an ancient word — Latin *cor*, “heart”. In \(Self.seconds) seconds, type every living word you can think of that comes from it: *core*, *courage*, *cordial*, *corazón*…")
-            Picker("Players", selection: $players) {
-                Text("Solo").tag(1)
-                Text("Two players").tag(2)
+            Stepper(value: $players, in: 1...Self.maxPlayers) {
+                Text(players == 1 ? "Solo" : "\(players) players, one after another")
             }
-            .pickerStyle(.segmented)
+            .accessibilityIdentifier("huntPlayers")
+            if players > 1 { PlayerNames(names: $names, count: players) }
             if let error { Text(error).foregroundStyle(IconPalette.coral) }
             Button {
                 Task { await newRoot() }
@@ -62,8 +64,9 @@ struct HuntView: View {
                 Text("\(root.total)+ descendants in \(GameLanguage.name(GameLanguage.current == nil ? root.lang : GameLanguage.current))")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if players == 2 {
-                Text("Player \(p + 1), your turn").font(.headline).foregroundStyle(color(p))
+            if players > 1 {
+                Text("\(name(p)), your turn").font(.headline).foregroundStyle(color(p))
+                Text("Pass the phone — the others look away!").font(.caption).foregroundStyle(.secondary)
             }
             Button("Go — \(Self.seconds) seconds") { begin(p) }
                 .buttonStyle(.borderedProminent).tint(color(p)).foregroundStyle(IconPalette.navy)
@@ -81,7 +84,7 @@ struct HuntView: View {
                     ScorePill(label: "Time", value: "\(Int(left.rounded(.up)))s",
                               color: left < 10 ? IconPalette.coral : .white)
                     Spacer()
-                    ScorePill(label: players == 2 ? "Player \(p + 1)" : "Found",
+                    ScorePill(label: players > 1 ? name(p) : "Found",
                               value: "\(found[p].count)", color: color(p))
                 }
                 .onChange(of: left == 0) { _, over in if over { finish(p) } }
@@ -120,7 +123,7 @@ struct HuntView: View {
                 if let root { RootTitle(node: root.root, size: 28) }
                 ForEach(0..<players, id: \.self) { p in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(players == 2 ? "Player \(p + 1): \(found[p].count)" : "You found \(found[p].count)")
+                        Text(players > 1 ? "\(name(p)): \(found[p].count)" : "You found \(found[p].count)")
                             .font(.headline).foregroundStyle(color(p))
                         ForEach(found[p], id: \.self) { f in
                             PathLine(path: f.path) { nodes[$0] }
@@ -128,10 +131,9 @@ struct HuntView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if players == 2 {
-                    Text(found[0].count == found[1].count ? "A draw!"
-                         : "Player \(found[0].count > found[1].count ? 1 : 2) wins")
-                        .font(.system(.title, design: .serif))
+                if players > 1 {
+                    Text(verdict).font(.system(.title, design: .serif))
+                        .multilineTextAlignment(.center)
                 }
                 if let root {
                     let all = Set(found.flatMap { $0.map { $0.text.lowercased() } })
@@ -155,13 +157,23 @@ struct HuntView: View {
         }
     }
 
-    private func color(_ p: Int) -> Color { p == 0 ? Game.hunt.color : IconPalette.violet }
+    private func color(_ p: Int) -> Color { PlayerColors.color(p) }
+
+    private func name(_ p: Int) -> String { PlayerNames.resolved(names, count: players)[p] }
+
+    /// Who found the most; a draw between the best when tied.
+    private var verdict: String {
+        let best = (0..<players).map { found[$0].count }.max() ?? 0
+        let top = (0..<players).filter { found[$0].count == best }
+        return top.count == 1 ? "\(name(top[0])) wins"
+            : "A draw: " + top.map(name).joined(separator: ", ")
+    }
 
     private func newRoot() async {
         error = nil
         do {
             root = try await api.gameRoot(lang: GameLanguage.current)
-            found = [[], []]
+            found = Array(repeating: [], count: Self.maxPlayers)
             nodes = [:]
             phase = .ready(0)
         } catch {
@@ -180,7 +192,7 @@ struct HuntView: View {
     private func finish(_ p: Int) {
         guard phase == .playing(p) else { return }
         typing = false
-        phase = p == 0 && players == 2 ? .ready(1) : .results
+        phase = p + 1 < players ? .ready(p + 1) : .results
     }
 
     private func submit(_ p: Int) {

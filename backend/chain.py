@@ -79,8 +79,10 @@ def descend(db, ancestor, seen, keep, generations=None):
                     continue
                 seen.add(src)
                 below.append(src)
-                if wlang in MODERN and entry and plain(word) and keep(word, wlang, zipf):
-                    found[src] = (word, wlang, zipf)
+                if wlang in MODERN and entry and plain(word):
+                    zipf = frequency(db, src, wlang, zipf)
+                    if keep(word, wlang, zipf):
+                        found[src] = (word, wlang, zipf)
         frontier = below
     return found
 
@@ -100,31 +102,62 @@ def reply(body: ReplyIn, db: sqlite3.Connection = Depends(api.get_db)):
     if not ids:
         raise HTTPException(404, "word not found")
     used = {u.strip().lower() for u in body.used} | {body.word.text.strip().lower()}
-    up = climb(db, ids, level["climb"])
     if body.lang:
         langs = {body.lang}
     else:
         langs = None if level["any_language"] else {lang, "en"}
+    near = climb(db, ids, MAX_COST)
+    # At the level first; with nothing there, wider: rarer words, older ancestors (a
+    # smaller language has few common words close by).
+    pool, checked = {}, []
+    for wide in (False, True):
+        settings = {**level, **(WIDER if wide else {})}
+        pool = candidates(db, ids, body, settings, used, langs)
+        checked = verified(db, ids, body, pool, near, rng)
+        if checked:
+            break
+    if not checked:
+        api.log.info(f"{api._c('1;33', 'chain')}  {body.word.text} → {api._c('2', 'nothing found')}")
+        raise HTTPException(404, "no word left to play")
+    checked.sort()
+    reach = settings["max_distance"]
+    close = [c for c in checked if c[0] <= reach] or checked[:1]
+    distance, tid, meet = close[0] if body.level == "easy" else rng.choice(close)
+    word, wlang, _ = pool[tid]
+    api.log.info(f"{api._c('1;33', 'chain')}  {body.word.text} → {word} ({wlang})  "
+                 f"{api._c('2', f'distance {distance:g}, {len(pool)} candidates, {body.level}')}")
+    return ReplyOut(text=word, lang=wlang, meet=meet, candidates=len(pool))
 
+
+# How the app widens its search when nothing is found at its level.
+WIDER = {"climb": 20, "min_zipf": 0.0, "max_distance": 20, "ancestors": 24, "generations": 5}
+
+
+def candidates(db, ids, body, level, used, langs):
+    """Modern words below the last word's nearest ancestors: {term id: (word, lang, zipf)}."""
+    up = climb(db, ids, level["climb"])
     # ancestors to branch from, nearest first; never the root the last link went through
     ancestors = sorted((cost, n) for n, (cost, _, _) in up.items()
-                       if n not in ids and n != body.avoid_root)[:ANCESTORS_TRIED]
-    pool = {}  # term id -> (word, lang, zipf)
+                       if n not in ids and n != body.avoid_root)[:level.get("ancestors", ANCESTORS_TRIED)]
+    pool = {}
     seen = set(ids) | {n for _, n in ancestors}
     for _, anc in ancestors:
         pool.update(descend(db, anc, seen, lambda word, wlang, zipf: (
             word.lower() not in used and zipf >= level["min_zipf"]
-            and (not langs or wlang in langs))))
+            and (not langs or wlang in langs) and script(word) == script(body.word.text)),
+            generations=level.get("generations")))
         if len(pool) >= POOL_ENOUGH:
             break
+    return pool
 
-    # Some at random among the commoner ones, each checked the way the app checks a move
-    # (POST /scene searches at MAX_COST first): it must meet the last word, and not at the
-    # root to avoid. Then the closest link (easy) or any close enough one.
+
+def verified(db, ids, body, pool, near, rng):
+    """Some at random among the commoner candidates, each checked the way the app checks
+    a move (POST /scene searches at MAX_COST first): it must meet the last word, and not
+    at the root to avoid. [(distance, term id, meet)]"""
     ranked = sorted(pool, key=lambda t: -pool[t][2])[:CANDIDATES_CHECKED * 2]
     rng.shuffle(ranked)
-    near = climb(db, ids, MAX_COST)
-    checked = []  # (distance, term id, meet)
+    checked = []
     for tid in ranked[:CANDIDATES_CHECKED]:
         word, wlang, _ = pool[tid]
         # forms of one word don't count: the app won't accept them as a link either
@@ -133,16 +166,7 @@ def reply(body: ReplyIn, db: sqlite3.Connection = Depends(api.get_db)):
         found = meetings(near, climb(db, [tid], MAX_COST), 1)
         if found and found[0][1] != body.avoid_root and sensible_meet(db, found[0][1]):
             checked.append((found[0][0], tid, found[0][1]))
-    if not checked:
-        raise HTTPException(404, "no word left to play")
-    checked.sort()
-    reach = level["max_distance"]
-    close = [c for c in checked if c[0] <= reach] or checked[:1]
-    distance, tid, meet = close[0] if body.level == "easy" else rng.choice(close)
-    word, wlang, _ = pool[tid]
-    api.log.info(f"{api._c('1;33', 'chain')}  {body.word.text} → {word} ({wlang})  "
-                 f"{api._c('2', f'distance {distance:g}, {len(pool)} candidates, {body.level}')}")
-    return ReplyOut(text=word, lang=wlang, meet=meet, candidates=len(pool))
+    return checked
 
 
 def sensible_meet(db, node):
@@ -183,8 +207,61 @@ def common_words(db, lang):
     """(id, word) of a language's common words with an etymology; read once (a scan of
     the language takes a couple of seconds)."""
     if lang not in _common:
-        _common[lang] = tuple(db.execute(
-            "SELECT t.id, t.word FROM term t WHERE t.lang=? AND t.has_entry=1 "
-            "AND t.zipf BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM edge e WHERE e.src=t.id)",
-            (lang, *START_ZIPF)))
+        estimated = estimates(db, lang)
+        if estimated is None:
+            rows = db.execute(
+                "SELECT t.id, t.word FROM term t WHERE t.lang=? AND t.has_entry=1 "
+                "AND t.zipf BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM edge e WHERE e.src=t.id)",
+                (lang, *START_ZIPF))
+        else:
+            low, high = START_ZIPF
+            ids = [t for t, z in estimated.items() if low <= z <= high]
+            rows = db.execute(
+                f"SELECT t.id, t.word FROM term t WHERE t.id IN ({','.join('?' * len(ids))}) "
+                f"AND t.has_entry=1 AND EXISTS (SELECT 1 FROM edge e WHERE e.src=t.id)", ids) \
+                if ids else []
+        _common[lang] = tuple(rows)
     return _common[lang]
+
+
+_estimates = {}
+
+
+def estimates(db, lang):
+    """For a language with no frequency list (Belarusian, Estonian): each word's
+    frequency guessed from its English meaning (хата, "house": as common as house).
+    None for a language that has real frequencies."""
+    if lang not in _estimates:
+        has = db.execute("SELECT 1 FROM term WHERE lang=? AND zipf IS NOT NULL LIMIT 1",
+                         (lang,)).fetchone()
+        if has:
+            _estimates[lang] = None
+        else:
+            # two indexed lookups; one join lets SQLite pick a slow order
+            meanings = db.execute(
+                "SELECT term, key FROM meaning WHERE term IN "
+                "(SELECT id FROM term WHERE lang=?)", (lang,)).fetchall()
+            keys = list({k for _, k in meanings})
+            english = {}
+            for i in range(0, len(keys), 500):
+                part = keys[i:i + 500]
+                english.update(db.execute(
+                    f"SELECT word, zipf FROM term WHERE lang='en' AND zipf IS NOT NULL "
+                    f"AND word IN ({','.join('?' * len(part))})", part))
+            guess = {}
+            for term, key in meanings:
+                if key in english:
+                    guess[term] = max(guess.get(term, 0.0), english[key])
+            _estimates[lang] = guess
+    return _estimates[lang]
+
+
+def frequency(db, tid, lang, zipf):
+    """A word's Zipf frequency: its own, or the estimate where its language has none."""
+    estimated = estimates(db, lang)
+    return zipf if estimated is None else estimated.get(tid, 0.0)
+
+
+def script(word):
+    """"cyrl" or "latn": Serbo-Croatian is written in both, and a game keeps to one."""
+    return "cyrl" if any("\u0400" <= c <= "\u04ff" for c in word) else "latn"

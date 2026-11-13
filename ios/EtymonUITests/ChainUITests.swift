@@ -47,6 +47,110 @@ final class ChainUITests: XCTestCase {
         attach(app, "chain-unknown-word")
     }
 
+    /// A miss, then Etymon's move: the turn comes back to you (it once stayed on
+    /// "Etymon is thinking…").
+    func testTurnComesBackAfterAMiss() {
+        let app = XCUIApplication()
+        let server = ProcessInfo.processInfo.environment["ETYMON_API"] ?? "http://localhost:8000"
+        app.launchArguments = ["-api", server, "-memoryStore", "-game", "chain", "-chainStart", "music",
+                               "-gameLanguage", ""]
+        app.launch()
+        XCTAssertTrue(app.buttons["chainStart"].waitForExistence(timeout: 10))
+        app.buttons["chainStart"].tap()
+        let field = app.textFields["chainWord"]
+        let yours = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'You, a word linked to'")).firstMatch
+        for word in ["muse", "amused", "table"] {
+            XCTAssertTrue(field.waitForExistence(timeout: 20), "your turn before \(word)")
+            field.tap()
+            field.typeText(word)
+            app.buttons["chainPlay"].tap()
+            // Etymon plays, then it's yours again
+            XCTAssertTrue(yours.waitForExistence(timeout: 25), "turn back after \(word)")
+            attach(app, "after-\(word)")
+        }
+    }
+
+    /// Impostor, Birthplace and Scavenger with two players passing the phone.
+    func testGamesForTwo() {
+        let app = XCUIApplication()
+        let server = ProcessInfo.processInfo.environment["ETYMON_API"] ?? "http://localhost:8000"
+        app.launchArguments = ["-api", server, "-memoryStore", "-game", "impostor"]
+        app.launch()
+        let ready = app.buttons["handOffReady"]
+        func twoPlayers() {
+            let more = app.steppers["players"].buttons.element(boundBy: 1)
+            XCTAssertTrue(more.waitForExistence(timeout: 10))
+            more.tap()
+        }
+
+        // Impostor: each picks in secret, then both picks show
+        twoPlayers()
+        app.buttons["impostorStart"].tap()
+        for i in 0..<2 {
+            XCTAssertTrue(ready.waitForExistence(timeout: 10), "hand off \(i)")
+            ready.tap()
+            let word = app.buttons["impostorWord\(i)"]
+            XCTAssertTrue(word.waitForExistence(timeout: 30))
+            word.tap()
+        }
+        XCTAssertTrue(app.buttons["impostorNext"].waitForExistence(timeout: 10))
+        let picked = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Picked by'"))
+        XCTAssertEqual(picked.count, 2, "both picks shown")
+        attach(app, "impostor-two")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        // Birthplace: two pins, then both distances
+        app.buttons["game-birthplace"].tap()
+        twoPlayers()
+        app.buttons["birthStart"].tap()
+        for i in 0..<2 {
+            XCTAssertTrue(ready.waitForExistence(timeout: 10), "hand off \(i)")
+            ready.tap()
+            XCTAssertTrue(app.staticTexts["birthWord"].waitForExistence(timeout: 30))
+            app.maps.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.3 + 0.3 * Double(i), dy: 0.5)).tap()
+            let guess = app.buttons["birthGuess"]
+            expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: guess)
+            waitForExpectations(timeout: 5)
+            guess.tap()
+        }
+        XCTAssertTrue(app.buttons["birthNext"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Player 2: '")).firstMatch.exists)
+        attach(app, "birthplace-two")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        // Scavenger: Player 2 claims a find
+        app.buttons["game-scavenger"].tap()
+        twoPlayers()
+        app.buttons["scavengerStart"].tap()
+        let claim = app.buttons["claim1"]
+        XCTAssertTrue(claim.waitForExistence(timeout: 30))
+        claim.tap()
+        attach(app, "scavenger-two")
+    }
+
+    /// Six players passing one phone: the board shows them all.
+    func testSixPlayers() {
+        let app = XCUIApplication()
+        let server = ProcessInfo.processInfo.environment["ETYMON_API"] ?? "http://localhost:8000"
+        app.launchArguments = ["-api", server, "-memoryStore", "-game", "chain", "-chainStart", "night"]
+        app.launch()
+        let start = app.buttons["chainStart"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        app.buttons["Pass and play"].tap()
+        let more = app.steppers["chainPlayers"].buttons.element(boundBy: 1)
+        for _ in 0..<4 { more.tap() }
+        attach(app, "chain-six-setup")
+        start.tap()
+        XCTAssertTrue(app.textFields["chainWord"].waitForExistence(timeout: 10))
+        for name in ["Player 1", "Player 6"] {
+            XCTAssertTrue(app.staticTexts[name].exists, name)
+        }
+        app.buttons["chainPass"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Player 2, a word'"))
+            .firstMatch.waitForExistence(timeout: 5))
+        attach(app, "chain-six-board")
+    }
+
     /// Each of the other games makes a puzzle and takes an answer.
     func testOtherGames() {
         let app = XCUIApplication()
@@ -55,6 +159,8 @@ final class ChainUITests: XCTestCase {
         app.launch()
 
         // Impostor: pick one, the answer shows
+        XCTAssertTrue(app.buttons["impostorStart"].waitForExistence(timeout: 10))
+        app.buttons["impostorStart"].tap()
         let first = app.buttons["impostorWord0"]
         XCTAssertTrue(first.waitForExistence(timeout: 30))
         attach(app, "impostor")
@@ -80,6 +186,7 @@ final class ChainUITests: XCTestCase {
 
         // Birthplace: tap the map, guess, the journey shows
         app.buttons["game-birthplace"].tap()
+        app.buttons["birthStart"].tap()
         XCTAssertTrue(app.staticTexts["birthWord"].waitForExistence(timeout: 30))
         app.maps.firstMatch.tap()
         // the map takes a tap only once it can't be a double tap (zoom)
@@ -87,13 +194,13 @@ final class ChainUITests: XCTestCase {
         expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: guess)
         waitForExpectations(timeout: 5)
         guess.tap()
-        XCTAssertTrue(app.buttons["Next word"].waitForExistence(timeout: 5)
-                      || app.buttons["See score"].exists)
+        XCTAssertTrue(app.buttons["birthNext"].waitForExistence(timeout: 5))
         attach(app, "birthplace")
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
         // Scavenger: an ancestor; a typed word is checked
         app.buttons["game-scavenger"].tap()
+        app.buttons["scavengerStart"].tap()
         let word = app.textFields["scavengerWord"]
         XCTAssertTrue(word.waitForExistence(timeout: 30))
         word.tap()

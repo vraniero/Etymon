@@ -3,11 +3,19 @@ import SwiftUI
 
 /// Scavenger: an ancestor to hunt for in the world. Photograph a sign, a label, a page:
 /// every word read from it is checked, and any that descends from the ancestor is a find.
-/// One point per ancestor found; skip to another any time.
+/// One point per ancestor found; skip to another any time. Up to six: everyone hunts
+/// for the same ancestor, whoever finds a word claims it on the phone, first to three wins.
 struct ScavengerView: View {
+    static let target = 3  // finds to win, with several players
+
+    @State private var started = false
+    @State private var count = 1
+    @State private var names: [String] = []
+    @State private var claimant = 0  // who's photographing their find
+    @State private var scores: [Int] = [0]
+    @State private var winner: Int?
     @State private var target: GameRoot?
     @State private var error: String?
-    @State private var score = 0
     @State private var finds: [(GameCheck.Found, GameCheck)] = []
     @State private var status: String?
     @State private var busy = false
@@ -18,18 +26,31 @@ struct ScavengerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                ScorePill(label: "Found", value: "\(score)", color: Game.scavenger.color)
-            }
-            .padding(.horizontal)
-            if let target {
-                ScrollView { board(target).padding() }
+            if !started {
+                setup
+            } else if let winner {
+                ScrollView {
+                    VStack(spacing: 14) {
+                        Text("\(players[winner]) found \(Self.target) first!").foregroundStyle(.secondary)
+                        Leaderboard(names: players, scores: scores, unit: "found")
+                        HStack {
+                            Button("Play again") { start() }
+                                .buttonStyle(.borderedProminent).tint(Game.scavenger.color)
+                                .foregroundStyle(IconPalette.navy)
+                            Button("Change players") { started = false }.buttonStyle(.bordered)
+                        }
+                    }
+                    .padding()
+                }
             } else {
-                GameLoading(error: error) { Task { await load() } }
+                header
+                if let target {
+                    ScrollView { board(target).padding() }
+                } else {
+                    GameLoading(error: error) { Task { await load() } }
+                }
             }
         }
-        .task { if target == nil { await load() } }
         .onChange(of: item) {
             guard let item else { return }
             Task {
@@ -48,12 +69,68 @@ struct ScavengerView: View {
         }
     }
 
+    private var players: [String] { PlayerNames.resolved(names, count: count, first: count == 1 ? "You" : "Player 1") }
+
+    private var setup: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("A word hunt in the real world").font(.system(.title2, design: .serif))
+                Text("You'll get an ancestor — Latin *rex*, “king”. Find a word that comes from it on a sign, a menu, a label, a book, and photograph it.")
+                PlayersSetup(count: $count, names: $names,
+                             how: "Everyone hunts for the same ancestor. Found one? Take the phone, pick your name, photograph it. First to \(Self.target) wins.")
+                Button { start() } label: {
+                    Text("Start").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent).tint(Game.scavenger.color).foregroundStyle(IconPalette.navy)
+                .accessibilityIdentifier("scavengerStart")
+            }
+            .padding(20)
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Spacer()
+            if count == 1 {
+                ScorePill(label: "Found", value: "\(scores[0])", color: Game.scavenger.color)
+            } else {
+                ForEach(0..<count, id: \.self) { p in
+                    Text("\(scores[p])").font(.caption.weight(.bold).monospacedDigit())
+                        .frame(minWidth: 24).padding(.vertical, 4)
+                        .background(PlayerColors.color(p).opacity(0.25), in: Capsule())
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    /// With several players: whose find this is, before photographing it.
+    private var claim: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Found one? Who are you?").font(.caption).foregroundStyle(.secondary)
+            FlowLayout(spacing: 8) {
+                ForEach(0..<count, id: \.self) { p in
+                    Button { claimant = p } label: {
+                        Text(players[p]).font(.callout)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(PlayerColors.color(p).opacity(claimant == p ? 0.45 : 0.12), in: Capsule())
+                            .overlay(Capsule().strokeBorder(PlayerColors.color(p).opacity(claimant == p ? 1 : 0.4)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("claim\(p)")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func board(_ t: GameRoot) -> some View {
         VStack(spacing: 18) {
             Text("Find, around you, a word that comes from").foregroundStyle(.secondary)
             RootTitle(node: t.root)
             Text("Signs, menus, labels, books — in any language.")
                 .font(.caption).foregroundStyle(.secondary)
+            if count > 1 && finds.isEmpty { claim }
 
             HStack(spacing: 12) {
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -135,8 +212,13 @@ struct ScavengerView: View {
             if let hit = result.found.first {
                 let first = finds.isEmpty
                 withAnimation { finds += result.found.map { ($0, result) } }
-                if first { score += 1 }
-                status = "Found! “\(hit.text)” comes from \(target.root.word)."
+                let who = count == 1 ? 0 : claimant
+                if first { scores[who] += 1 }
+                status = "Found\(count == 1 ? "" : " by \(players[who])")! “\(hit.text)” comes from \(target.root.word)."
+                if count > 1, scores[who] >= Self.target {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    withAnimation { winner = who }
+                }
             } else {
                 status = words.count == 1
                     ? "“\(words[0])” doesn't come from \(target.root.word). Keep looking."
@@ -145,6 +227,14 @@ struct ScavengerView: View {
         } catch {
             status = "Can't reach the server."
         }
+    }
+
+    private func start() {
+        scores = Array(repeating: 0, count: count)
+        winner = nil
+        claimant = 0
+        started = true
+        Task { await load() }
     }
 
     private func load() async {

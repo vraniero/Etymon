@@ -58,3 +58,15 @@ def test_birthplace_travels():
     assert born["lat"] is not None and not born["reconstructed"]
     assert b["journey"][0] != b["born"] and b["journey"][-1] == b["born"]
     assert b["km"] >= 400
+
+
+@pytest.mark.parametrize("lang", ["be", "uk", "sh"])
+def test_cyrillic_and_unlisted_languages(lang):
+    """Belarusian has no frequency list (its words' commonness comes from their English
+    meanings); Serbo-Croatian keeps to one script within a puzzle."""
+    for kind in ("impostor", "root", "birthplace"):
+        r = client.get(f"/games/{kind}", params={"lang": lang, "seed": 5})
+        assert r.status_code == 200, kind
+    words = client.get("/games/impostor", params={"lang": lang, "seed": 5}).json()["words"]
+    from chain import script
+    assert len({script(w["text"]) for w in words}) == 1

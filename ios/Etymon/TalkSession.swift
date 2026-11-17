@@ -273,6 +273,7 @@ final class TalkSession {
             number = speakers.count + 1
             speakers.append(Speaker(id: voice, number: number, lang: lang))
         }
+        LanguagePacks.shared.noticed(language: lang)
         if let heardIn = lang ?? detected {
             lastLanguage = heardIn
             lastLanguageKnown = lang != nil

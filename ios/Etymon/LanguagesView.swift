@@ -84,6 +84,37 @@ struct LanguagesView: View {
     }
 }
 
+/// The first launch, until the dictionary's core is on the phone: it comes with the app
+/// (an essential pack), so this is mostly the few seconds of setting it up.
+struct PreparingDictionary: View {
+    @State private var packs = LanguagePacks.shared
+
+    var body: some View {
+        ZStack {
+            Color("LaunchBackground").ignoresSafeArea()
+            VStack(spacing: 18) {
+                Image("LaunchLogo").resizable().frame(width: 160, height: 160)
+                switch packs.state(of: LanguagePacks.core) {
+                case .failed(let message):
+                    Text("The dictionary couldn't be set up").font(.headline)
+                    Text(message).font(.footnote).multilineTextAlignment(.center).opacity(0.7)
+                    Button("Try again") { Task { await packs.retry() } }
+                        .buttonStyle(.borderedProminent)
+                case .downloading(let done):
+                    Text("Downloading the dictionary…").font(.headline)
+                    ProgressView(value: done).frame(width: 200)
+                default:
+                    Text("Getting the dictionary ready…").font(.headline)
+                    ProgressView()
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(32)
+        }
+        .accessibilityIdentifier("preparingDictionary")
+    }
+}
+
 /// "This looks like Polish: download it?" — shown when the app reads a language that
 /// isn't on the phone yet.
 struct LanguageOfferBanner: View {

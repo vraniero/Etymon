@@ -180,8 +180,9 @@ struct HelpView: View {
                                 + "connection needed. − and + there pick a depth by hand, Auto goes "
                                 + "back (in Type, under the sliders button; also in Settings).")
                     HelpRow(symbol: "gear", title: "Settings",
-                            text: "The backend address (http://localhost:8000 in the simulator, "
-                                + "http://<your Mac's address>:8000 on a phone) and the search depth.")
+                            text: "The languages on this phone (download or remove them), how many "
+                                + "words a scene holds, the steps drawn between words and roots, "
+                                + "and the search depth.")
                 }
 
                 Section {
@@ -192,8 +193,23 @@ struct HelpView: View {
                          + "Slovak, Slovene; Romanian, Hungarian, Estonian, Lithuanian, Latvian. "
                          + "The camera reads the scripts and accents your iOS version supports.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("Etymological data from Wiktionary, CC BY-SA 4.0.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
+                Section("Credits") {
+                    Credit(title: "Etymologies, meanings and word forms",
+                           text: "From Wiktionary, by its contributors, extracted by Wiktextract "
+                               + "(kaikki.org). Etymon's dictionary is built from them and, like "
+                               + "them, is shared under CC BY-SA 4.0.",
+                           links: [("Wiktionary", "https://www.wiktionary.org"),
+                                   ("Wiktextract", "https://kaikki.org"),
+                                   ("CC BY-SA 4.0", "https://creativecommons.org/licenses/by-sa/4.0/")])
+                    Credit(title: "Word frequencies",
+                           text: "wordfreq, by Robyn Speer, CC BY-SA 4.0.",
+                           links: [("wordfreq", "https://github.com/rspeer/wordfreq")])
+                    Credit(title: "Where languages were spoken",
+                           text: "Glottolog, CC BY 4.0; ISO 639-3 codes by SIL International.",
+                           links: [("Glottolog", "https://glottolog.org"),
+                                   ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/")])
                 }
             }
             .navigationTitle("How it works")
@@ -232,6 +248,26 @@ private struct LegendRow<Sample: View>: View {
         HStack(spacing: 12) {
             sample.frame(width: 72)
             Text(text).font(.subheadline)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// A source the app's data comes from, with its licence.
+private struct Credit: View {
+    let title: String
+    let text: String
+    let links: [(String, String)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text(text).font(.footnote).foregroundStyle(.secondary)
+            HStack(spacing: 14) {
+                ForEach(links, id: \.1) { name, url in
+                    if let url = URL(string: url) { Link(name, destination: url).font(.footnote) }
+                }
+            }
         }
         .padding(.vertical, 2)
     }

@@ -15,9 +15,15 @@ import System
 final class LanguagePacks {
     static let shared = LanguagePacks()
 
-    /// Off until lookups run on the phone (today they go to the backend, so a downloaded
-    /// pack changes nothing yet): on with the `-packs` launch argument, to try downloading.
-    static var isEnabled: Bool { ProcessInfo.processInfo.arguments.contains("-packs") }
+    /// On in the App Store app. In development, where the App Store doesn't host the packs,
+    /// only with the `-packs` launch argument (and a mock server, `xcrun ba-serve`).
+    nonisolated static var isEnabled: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("-packs")
+        #else
+        return !ProcessInfo.processInfo.arguments.contains("-memoryStore")
+        #endif
+    }
 
     enum State: Equatable {
         case absent
@@ -38,16 +44,22 @@ final class LanguagePacks {
     private(set) var sizes: [String: Int] = [:]
     /// A language just read that isn't on the phone: shown as an offer to download it.
     private(set) var offer: String?
+    /// The whole dictionary is on the phone already (a development copy): no packs needed.
+    private(set) var complete = false
+    /// Lookups can start: the core is in (or the dictionary is complete).
+    var ready: Bool { complete || state(of: Self.core) == .installed }
+    /// Setting up: packs started, and the core isn't in yet (the first launch).
+    var preparing: Bool { started && !ready }
 
     let store: GraphStore
-    private var started = false
+    private(set) var started = false
     private static let declinedKey = "declinedLanguagePacks"
 
     init(store: GraphStore = GraphStore(url: GraphStore.defaultURL)) {
         self.store = store
     }
 
-    func state(of pack: String) -> State { states[pack] ?? .absent }
+    func state(of pack: String) -> State { complete ? .installed : states[pack] ?? .absent }
     func isInstalled(_ language: String) -> Bool { state(of: Self.pack(for: language)) == .installed }
 
     /// On launch: what the phone already has, then the core, English and the phone's own
@@ -55,6 +67,10 @@ final class LanguagePacks {
     func start() async {
         guard !started else { return }
         started = true
+        if await store.isDevelopmentCopy() {
+            complete = true
+            return
+        }
         for id in (try? await store.installed().keys).map(Array.init) ?? [] {
             states[id] = .installed
         }
@@ -77,7 +93,7 @@ final class LanguagePacks {
     /// The app read text in this language: offer its pack if it isn't here yet (once: a
     /// language turned down isn't offered again, Settings still has it).
     func noticed(language: String?) {
-        guard started, let language, WordExtractor.languages.contains(language),
+        guard started, !complete, let language, WordExtractor.languages.contains(language),
               state(of: Self.pack(for: language)) == .absent,
               !declined.contains(language), offer == nil else { return }
         withAnimation(.spring) { offer = language }
@@ -123,6 +139,7 @@ final class LanguagePacks {
             states[id] = .installing
             let file = try manager.url(for: Self.path(of: id))
             try await store.merge(pack: id, version: pack.version, file: file)
+            LocalBackend.reload()
             try? await manager.remove(assetPackWithID: id)  // merged: the download can go
             states[id] = .installed
         } catch {
@@ -133,9 +150,18 @@ final class LanguagePacks {
     /// Take a language off the phone: the dictionary is rebuilt from the packs that stay,
     /// downloaded again (merged rows can't be told apart by pack).
     func remove(_ id: String) async {
-        guard id != Self.core, state(of: id) == .installed else { return }
+        guard id != Self.core, !complete, state(of: id) == .installed else { return }
         let keep = ((try? await store.installed().keys).map(Array.init) ?? []).filter { $0 != id }
         await rebuild(keep, dropping: id)
+    }
+
+    /// Try again after the core failed (offline at first launch).
+    func retry() async {
+        if case .failed = state(of: Self.core) { states[Self.core] = .absent }
+        await install(Self.core)
+        for id in Self.preferredLanguages.map(Self.pack(for:)) where state(of: id) == .absent {
+            await install(id)
+        }
     }
 
     /// Newer versions of packs on the phone (a data update): rebuild with them.
@@ -158,6 +184,7 @@ final class LanguagePacks {
                 packs.append((id, pack.version, try manager.url(for: Self.path(of: id))))
             }
             try await store.rebuild(from: packs)
+            LocalBackend.reload()
             for id in ids {
                 try? await manager.remove(assetPackWithID: id)
                 states[id] = .installed

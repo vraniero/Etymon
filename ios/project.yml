@@ -9,6 +9,9 @@ settings:
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: 9P2NQ693B3
     CODE_SIGN_STYLE: Automatic
+    # the app and its extension carry the same version (the App Store requires it)
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
 targets:
   Etymon:
     type: application
@@ -24,8 +27,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ranierovirgilio.etymon
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
@@ -34,6 +35,7 @@ targets:
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Etymon reads the words in a photo to show how they are related.
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Etymon listens to the people talking around you, to show how the words they say are related.
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Etymon remembers where you found the words of a scene you save.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Etymon turns what people say into words on your iPhone, to show how they are related.
     info:
       path: Etymon/Info.plist
       properties:
@@ -41,6 +43,7 @@ targets:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: Etymon talks to its development server on your network.
         # the dictionary comes in packs hosted by the App Store: a core, then each language
+        ITSAppUsesNonExemptEncryption: false
         BAAppGroupID: group.com.ranierovirgilio.etymon
         BAHasManagedAssetPacks: true
         BAUsesAppleHosting: true
@@ -61,8 +64,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ranierovirgilio.etymon.packs
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_KEY_CFBundleDisplayName: Etymon Packs
     info:
       path: EtymonPacks/Info.plist

@@ -18,13 +18,38 @@ actor LocalBackend {
         var errorDescription: String? { message }
     }
 
-    /// The dictionary on this phone, if there is one. Looked for once, at first use.
-    static let shared: LocalBackend? = {
+    /// The dictionary on this phone, if there is one: opened at first use, and again when
+    /// a language pack has been merged in (`reload`).
+    static var shared: LocalBackend? {
+        opened.lock.withLock {
+            if !opened.tried {
+                opened.tried = true
+                opened.backend = open()
+            }
+            return opened.backend
+        }
+    }
+
+    /// The dictionary changed on disk (a pack merged in, or rebuilt): open it again.
+    static func reload() {
+        opened.lock.withLock {
+            opened.tried = true
+            opened.backend = open()
+        }
+    }
+
+    private final class Opened: @unchecked Sendable {
+        let lock = NSLock()
+        var tried = false
+        var backend: LocalBackend?
+    }
+    private static let opened = Opened()
+
+    private static func open() -> LocalBackend? {
         let url = GraphStore.defaultURL
-        guard FileManager.default.fileExists(atPath: url.path),
-              let backend = try? LocalBackend(url: url) else { return nil }
-        return backend
-    }()
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? LocalBackend(url: url)
+    }
 
     private let db: LocalDatabase
 

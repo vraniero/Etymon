@@ -43,6 +43,9 @@ struct RootView: View {
             }
         }
         .overlay(alignment: .top) { LanguageOfferBanner().padding(.top, 52) }  // under the bar
+        .overlay {
+            if LanguagePacks.shared.preparing { PreparingDictionary() }
+        }
         .task {
             // the dictionary's packs: not under UI tests, which run on an in-memory store
             if LanguagePacks.isEnabled, !ProcessInfo.processInfo.arguments.contains("-memoryStore") {

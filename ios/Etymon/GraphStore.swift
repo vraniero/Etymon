@@ -42,6 +42,17 @@ actor GraphStore {
             "SELECT id, version FROM installed_pack") { ($0.text(0), $0.int(1)) })
     }
 
+    /// A whole dictionary put on the phone in development (copied, not built from packs):
+    /// every language is there already.
+    func isDevelopmentCopy() -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let db = try? SQLiteConnection(url, readOnly: true),
+              (try? db.rows("SELECT 1 FROM sqlite_master WHERE name='term'") { _ in true })?.isEmpty == false
+        else { return false }
+        let packs = (try? db.rows("SELECT count(*) FROM installed_pack") { $0.int(0) })?.first ?? 0
+        return packs == 0
+    }
+
     /// Merge a downloaded pack's database in.
     func merge(pack id: String, version: Int, file: URL) throws {
         try Self.merge(into: url, pack: id, version: version, file: file)

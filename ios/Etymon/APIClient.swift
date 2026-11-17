@@ -13,6 +13,8 @@ struct APIClient {
     /// The dictionary on the phone, answering instead of a server (set by `fromSettings`
     /// when there is one; a client made for a given server never uses it).
     var local: LocalBackend? = nil
+    /// Answer on the phone only, never a server (the dictionary may still be on its way).
+    var onPhone = false
 
     /// `-api <url>` launch argument (e.g. the Mac's address when run on a phone) is
     /// remembered, so later launches from the home screen use it too. Taken once, at
@@ -23,27 +25,36 @@ struct APIClient {
         }
     }()
 
-    /// The dictionary is on this phone (LocalBackend): questions are answered here, with
-    /// no server. A server given at launch (`-api`, as the UI tests do) still wins.
+    /// Questions are answered on this phone (LocalBackend), with no server: always in the
+    /// App Store app; in development, when the dictionary is on the phone or packs are on.
+    /// A server given at launch (`-api`, as the UI tests do) still wins.
     static var isLocal: Bool {
-        LocalBackend.shared != nil && LaunchOptions.value(after: "-api") == nil
+        if LaunchOptions.value(after: "-api") != nil { return false }
+        #if DEBUG
+        return LocalBackend.shared != nil || LanguagePacks.isEnabled
+        #else
+        return true
+        #endif
     }
 
     static func fromSettings() -> APIClient {
         _ = launchServer
         let stored = UserDefaults.standard.string(forKey: baseURLKey) ?? defaultBaseURL
         return APIClient(baseURL: URL(string: stored) ?? URL(string: defaultBaseURL)!,
-                         local: isLocal ? LocalBackend.shared : nil)
+                         local: isLocal ? LocalBackend.shared : nil, onPhone: isLocal)
     }
 
     enum APIError: LocalizedError {
         case status(Int)
         /// The server can't be reached and this wasn't looked up before.
         case offline(URLError)
+        /// The dictionary isn't on the phone yet (its first pack is downloading).
+        case preparing
         var errorDescription: String? {
             switch self {
             case .status(let code): return "Server returned \(code)"
             case .offline: return "Offline, and not looked up before"
+            case .preparing: return "The dictionary is still being prepared"
             }
         }
     }
@@ -144,6 +155,7 @@ struct APIClient {
         if let local {
             return try JSONDecoder().decode(T.self, from: try await answer(request, with: local))
         }
+        if onPhone { throw APIError.preparing }
         let cacheKey = request.httpMethod == "GET" ? request.url.map(OfflineCache.key) : nil
         let data: Data
         do {

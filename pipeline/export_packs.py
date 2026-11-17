@@ -96,10 +96,12 @@ def compressed_size(path):
     return size
 
 
-def manifest(pack_id, file, essential=False):
-    """An asset-pack manifest for ba-package (Apple-hosted: no userInfo)."""
-    policy = ({"essential": {"installationEventTypes": ["firstInstallation", "subsequentUpdate"]}}
-              if essential else {"onDemand": {}})
+def manifest(pack_id, file, policy="onDemand"):
+    """An asset-pack manifest for ba-package (Apple-hosted: no userInfo). The core is
+    essential (installed with the app, which opens once it's there), common English is
+    prefetched (starts with the install), every other language is on demand."""
+    events = {"installationEventTypes": ["firstInstallation", "subsequentUpdate"]}
+    policy = {policy: events if policy != "onDemand" else {}}
     return {"assetPackID": pack_id, "downloadPolicy": policy,
             "fileSelectors": [{"fileSource": file, "fileDestination": f"graph/{file}"}],
             "platforms": ["iOS"],
@@ -155,7 +157,7 @@ def main():
         size, packed = (out / file).stat().st_size, compressed_size(out / file)
         pack_id = f"graph-{key}"
         (out / "manifests" / f"{pack_id}.json").write_text(
-            json.dumps(manifest(pack_id, file, essential=key == "core"), indent=2) + "\n")
+            json.dumps(manifest(pack_id, file, {"core": "essential", "en": "prefetch"}.get(key, "onDemand")), indent=2) + "\n")
         rows.append({"id": pack_id, "file": f"graph/{file}",
                      "language": None if key == "core" else langs[0],
                      "words": own, "terms": counts["term"], "bytes": size,

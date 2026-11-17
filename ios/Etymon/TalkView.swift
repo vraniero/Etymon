@@ -124,6 +124,7 @@ struct TalkView: View {
             .frame(maxWidth: 240)
             .accessibilityIdentifier("talkVision")
             Spacer(minLength: 0)
+            if APIClient.isLocal { languageMenu }
             Button {
                 showOptions = true
             } label: {
@@ -155,6 +156,39 @@ struct TalkView: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Color(red: 0.09, green: 0.1, blue: 0.15))
+    }
+
+    /// The languages Talk listens for, when it listens on the phone (no server): up to
+    /// three, told apart utterance by utterance.
+    private var languageMenu: some View {
+        Menu {
+            Section {
+                Toggle("Auto: find other languages", systemImage: "sparkles", isOn: Binding(
+                    get: { session.autoLanguages },
+                    set: { on in Task { await session.setAutoLanguages(on) } }))
+            } footer: {
+                Text("When someone speaks a language not listed below, Talk works out which, and listens for it too.")
+            }
+            Section("Listen for (up to \(OnDeviceSpeech.maxLanguages))") {
+                ForEach(session.listenLanguages, id: \.self) { code in
+                    Toggle(TalkCaption.name(code), isOn: Binding(
+                        get: { session.listenFor.contains(code) },
+                        set: { _ in Task { await session.toggleListening(for: code) } }))
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(session.listenFor.isEmpty ? "–" : session.listenFor.map { $0.uppercased() }.joined(separator: "·"))
+                if session.autoLanguages { Image(systemName: "sparkles").font(.caption2) }
+            }
+            .font(.callout.bold().monospaced())
+            .frame(minWidth: 24, minHeight: 24)
+        }
+        .menuActionDismissBehavior(.disabled)
+        .buttonStyle(.bordered)
+        .accessibilityLabel("Listening for \(session.listenFor.map(TalkCaption.name).joined(separator: ", "))")
+        .accessibilityIdentifier("talkLanguage")
+        .task { await session.loadListenLanguages() }
     }
 
     /// Only when something is filtered: what, in one line. Tap to change, ✕ to see all.

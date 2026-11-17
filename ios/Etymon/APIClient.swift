@@ -10,6 +10,9 @@ struct APIClient {
     var baseURL: URL
     var session: URLSession = .shared
     var cache: OfflineCache = .shared
+    /// The dictionary on the phone, answering instead of a server (set by `fromSettings`
+    /// when there is one; a client made for a given server never uses it).
+    var local: LocalBackend? = nil
 
     /// `-api <url>` launch argument (e.g. the Mac's address when run on a phone) is
     /// remembered, so later launches from the home screen use it too. Taken once, at
@@ -20,10 +23,17 @@ struct APIClient {
         }
     }()
 
+    /// The dictionary is on this phone (LocalBackend): questions are answered here, with
+    /// no server. A server given at launch (`-api`, as the UI tests do) still wins.
+    static var isLocal: Bool {
+        LocalBackend.shared != nil && LaunchOptions.value(after: "-api") == nil
+    }
+
     static func fromSettings() -> APIClient {
         _ = launchServer
         let stored = UserDefaults.standard.string(forKey: baseURLKey) ?? defaultBaseURL
-        return APIClient(baseURL: URL(string: stored) ?? URL(string: defaultBaseURL)!)
+        return APIClient(baseURL: URL(string: stored) ?? URL(string: defaultBaseURL)!,
+                         local: isLocal ? LocalBackend.shared : nil)
     }
 
     enum APIError: LocalizedError {
@@ -131,6 +141,9 @@ struct APIClient {
     /// Lookups (GET) are kept on the device: when the server can't be reached, the last
     /// answer for the same question is used, so saved networks can be explored offline.
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {
+        if let local {
+            return try JSONDecoder().decode(T.self, from: try await answer(request, with: local))
+        }
         let cacheKey = request.httpMethod == "GET" ? request.url.map(OfflineCache.key) : nil
         let data: Data
         do {
@@ -147,5 +160,25 @@ struct APIClient {
             data = cached
         }
         return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    /// The request answered on the phone, as the server would.
+    private func answer(_ request: URLRequest, with local: LocalBackend) async throws -> Data {
+        guard let url = request.url,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw APIError.status(400)
+        }
+        var path = components.path
+        if path.hasPrefix(baseURL.path) { path.removeFirst(baseURL.path.count) }
+        path = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let query = Dictionary((components.queryItems ?? []).compactMap { item in
+            item.value.map { (item.name, $0) }
+        }, uniquingKeysWith: { a, _ in a })
+        do {
+            return try await local.handle(method: request.httpMethod ?? "GET", path: path,
+                                          query: query, body: request.httpBody)
+        } catch let failure as LocalBackend.Failure {
+            throw APIError.status(failure.status)
+        }
     }
 }

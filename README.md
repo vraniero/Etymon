@@ -403,6 +403,37 @@ shows the scene's detected language.
 Under the hood the camera reads the frame carefully about once a second (new words,
 language) and quickly ~10 times a second in between to re-locate known words.
 
+### Language packs (on-device dictionary, in progress)
+
+The dictionary is moving onto the phone, so the app can run without a server. It comes in
+packs hosted by the App Store (Apple-hosted Background Assets, iOS 26.4+):
+
+- `graph-core`: every ancient term (Latin, Proto-Germanic, PIE…), downloaded with the app.
+- `graph-<lang>`: one per language (`graph-it`, `graph-en`, `graph-en-rare`…), on demand.
+  The phone's languages and English are fetched on first launch; any other language is
+  offered when the app first reads it, or from Settings › Languages.
+
+Each pack is merged into one SQLite database in Application Support (`GraphStore`), then
+its download is removed. Removing a language or a data update rebuilds the database from
+the packs that stay. The `EtymonPacks` extension downloads packs in the background; app and
+extension share the app group `group.com.ranierovirgilio.etymon`.
+
+Until lookups run on the phone, the packs change nothing, so the feature is off by default.
+Launch with `-packs` to try it (Settings › Languages, the language offer).
+
+Building and shipping the packs:
+
+```sh
+cd pipeline
+.venv/bin/python export_mobile.py            # data/etymon-mobile.sqlite
+.venv/bin/python export_packs.py --package   # data/packs/*.sqlite, manifests/, archives/*.aar
+```
+
+Upload `data/packs/archives/*.aar` to App Store Connect (the app's Asset Packs, through
+Transporter or the App Store Connect API), then test through TestFlight. For local tests,
+`xcrun ba-serve` serves the archives (it needs a TLS identity the test device trusts; set the
+URL override under Settings › Developer on the phone).
+
 ## Backend
 
 FastAPI over the SQLite graph, in `backend/`: the app sends the words it recognised and
@@ -544,7 +575,8 @@ Steps: see [Getting started](#getting-started). The scripts:
 | `geo.py` | places each language on the map (`language_geo` table): Glottolog points, hand-placed proto-language homelands; rerun after `build_graph.py` |
 | `query.py it padri` | explore one word |
 | `connect.py it padre en paternalistic` | what two words have in common |
-| `export_mobile.py` | a pruned, app-sized copy of the graph, for a possible full dictionary on the phone (today offline use relies on saved scenes and cached lookups) |
+| `export_mobile.py` | a pruned copy of the graph for running without a server: frequent modern words, every modern word with an etymology of its own, all their ancestors, meanings, forms and language locations (about 390 MB, 160 MB compressed; the backend's tests pass against it with `ETYMON_DB`) |
+| `export_packs.py` | splits the mobile graph into App Store–hosted packs: a core of ancient terms (≈10 MB download) and one pack per language (0.4–26 MB; English's long tail apart as `en-rare`), with Background Assets manifests; `--package` builds the `.aar` archives to upload |
 
 The historical and reconstructed languages matter: their entries list descendants
 across branches, which is what surfaces shared roots (PIE *\*ph₂tḗr* → Latin *pater*,

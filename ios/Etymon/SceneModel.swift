@@ -200,6 +200,7 @@ final class SceneModel {
     private func update(words newWords: [String]) {
         words = newWords
         language = WordExtractor.dominantLanguage(of: seenText)
+        LanguagePacks.shared.noticed(language: language)
         guard newWords != lastRequested else { return }
         pending?.cancel()
         pending = Task { [weak self] in

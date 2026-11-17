@@ -117,6 +117,16 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if APIClient.isLocal {
+                    Section {
+                        Label("On this phone", systemImage: "iphone")
+                    } header: {
+                        Text("Dictionary")
+                    } footer: {
+                        Text("Words are looked up on this phone, with no server and no connection "
+                             + "needed. Talk transcribes speech on the phone too.")
+                    }
+                } else {
                 Section {
                     TextField("Server", text: $baseURL)
                         .keyboardType(.URL).textInputAutocapitalization(.never)
@@ -126,6 +136,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("The simulator can use localhost. On a phone, use your Mac's address, "
                          + "e.g. http://192.168.1.20:8000, and start the server with --host 0.0.0.0.")
+                }
                 }
                 Section {
                     Stepper {
@@ -146,6 +157,14 @@ struct SettingsView: View {
                          + "left the frame. More words find more connections, but the network gets "
                          + "busier and slower to update: above about 100, the network and Explore "
                          + "get crowded.")
+                }
+                if LanguagePacks.isEnabled {
+                Section {
+                    NavigationLink("Languages") { LanguagesView() }
+                        .accessibilityIdentifier("languages")
+                } footer: {
+                    Text("The dictionary's languages on this phone: download or remove them.")
+                }
                 }
                 SavedSettingsSection()
                 Section {

@@ -59,6 +59,21 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.keyboards.firstMatch.exists)
     }
 
+    func testLanguagesInSettings() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-api", "http://localhost:8000", "-memoryStore", "-packs"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["homeSettings"].waitForExistence(timeout: 5))
+        app.buttons["homeSettings"].tap()
+        let languages = app.buttons["languages"]
+        XCTAssertTrue(languages.waitForExistence(timeout: 5))
+        languages.tap()
+        XCTAssertTrue(app.staticTexts["Core"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Italian"].exists)
+        attach(app, "languages")
+    }
+
     private func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name

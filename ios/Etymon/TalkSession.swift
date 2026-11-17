@@ -141,11 +141,57 @@ final class TalkSession {
         connecting = true
         listening = true
         do {
-            try await stream.start(base: client().baseURL)
+            if APIClient.isLocal {
+                try await stream.startOnDevice()  // no server: transcribed on the phone
+            } else {
+                try await stream.start(base: client().baseURL)
+            }
         } catch {
             self.error = error.localizedDescription
             listening = false
             connecting = false
+        }
+    }
+
+    /// Without a server, Talk listens for a few languages at once and tells them apart
+    /// (OnDeviceSpeech): those the phone can transcribe, and the ones chosen.
+    private(set) var listenLanguages: [String] = []
+    private(set) var listenFor: [String] = []
+
+    func loadListenLanguages() async {
+        guard APIClient.isLocal, listenLanguages.isEmpty else { return }
+        listenLanguages = await OnDeviceSpeech.available()
+        listenFor = await OnDeviceSpeech.chosen()
+    }
+
+    /// Auto: other languages found as they're spoken (OnDeviceSpeech.autoKey).
+    var autoLanguages = OnDeviceSpeech.autoDetects
+
+    func setAutoLanguages(_ on: Bool) async {
+        UserDefaults.standard.set(on, forKey: OnDeviceSpeech.autoKey)
+        autoLanguages = on
+        if listening {
+            stop()
+            await start()
+        }
+    }
+
+    /// Listen for this language too, or no longer (at least one stays; at most
+    /// OnDeviceSpeech.maxLanguages, the oldest choice making way). Restarts if listening.
+    func toggleListening(for language: String) async {
+        var chosen = listenFor
+        if let i = chosen.firstIndex(of: language) {
+            guard chosen.count > 1 else { return }
+            chosen.remove(at: i)
+        } else {
+            chosen.append(language)
+            if chosen.count > OnDeviceSpeech.maxLanguages { chosen.removeFirst() }
+        }
+        UserDefaults.standard.set(chosen, forKey: OnDeviceSpeech.languagesKey)
+        listenFor = chosen
+        if listening {
+            stop()
+            await start()
         }
     }
 
@@ -206,9 +252,12 @@ final class TalkSession {
             connecting = false
             understanding = max(understanding - 1, 0)
             Task { await heard(text: u.text, lang: u.lang, voice: u.persona, detected: u.detected) }
+        case .languages(let codes, let added):
+            listenFor = codes
+            say("Heard \(TalkCaption.name(added)) — now listening for it too")
         case .failed(let message):
             if listening {
-                error = "Lost the server: \(message)"
+                error = APIClient.isLocal ? "Listening stopped: \(message)" : "Lost the server: \(message)"
                 stop()
             }
         }

@@ -11,3 +11,4 @@ ios/Etymon.xcodeproj/
 ios/Etymon/Info.plist
 # logs, e.g. backend/backend.log
 *.log
+ios/build-device-test/

@@ -42,6 +42,13 @@ struct RootView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
+        .overlay(alignment: .top) { LanguageOfferBanner().padding(.top, 52) }  // under the bar
+        .task {
+            // the dictionary's packs: not under UI tests, which run on an in-memory store
+            if LanguagePacks.isEnabled, !ProcessInfo.processInfo.arguments.contains("-memoryStore") {
+                await LanguagePacks.shared.start()
+            }
+        }
     }
 
     private func go(_ mode: ContentView.Source?) {

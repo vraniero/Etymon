@@ -2,7 +2,7 @@ name: Etymon
 options:
   bundleIdPrefix: com.ranierovirgilio
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.4"  # Apple-hosted Background Assets (language packs)
   createIntermediateGroups: true
 settings:
   base:
@@ -14,6 +14,12 @@ targets:
     type: application
     platform: iOS
     sources: [Etymon]
+    dependencies:
+      - target: EtymonPacks
+    entitlements:
+      path: Etymon/Etymon.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.ranierovirgilio.etymon]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ranierovirgilio.etymon
@@ -34,10 +40,35 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: Etymon talks to its development server on your network.
+        # the dictionary comes in packs hosted by the App Store: a core, then each language
+        BAAppGroupID: group.com.ranierovirgilio.etymon
+        BAHasManagedAssetPacks: true
+        BAUsesAppleHosting: true
         UILaunchScreen:
           UIColorName: LaunchBackground
           UIImageName: LaunchLogo
           UIImageRespectsSafeAreaInsets: false
+  # Downloads the dictionary's packs in the background (Apple-hosted Background Assets)
+  EtymonPacks:
+    type: extensionkit-extension
+    platform: iOS
+    sources: [EtymonPacks]
+    entitlements:
+      path: EtymonPacks/EtymonPacks.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.ranierovirgilio.etymon]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ranierovirgilio.etymon.packs
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: Etymon Packs
+    info:
+      path: EtymonPacks/Info.plist
+      properties:
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.background-asset-downloader-extension
   EtymonTests:
     type: bundle.unit-test
     platform: iOS

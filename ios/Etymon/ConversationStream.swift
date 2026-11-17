@@ -39,6 +39,8 @@ final class ConversationStream: @unchecked Sendable {
         /// A sound transcribed to no words.
         case unheard
         case utterance(Utterance)
+        /// Listening on the phone, Auto heard another language and listens for it now.
+        case languages([String], added: String)
         case failed(String)
     }
 
@@ -67,6 +69,31 @@ final class ConversationStream: @unchecked Sendable {
     private var task: URLSessionWebSocketTask?
     private var converter: AVAudioConverter?
     private var origin: TimeInterval?  // uptime of the first sample streamed
+    private var onDevice: OnDeviceSpeech?  // listening without a server
+
+    /// Listen on the phone (no server): the same events, from on-device transcription.
+    func startOnDevice() async throws {
+        guard await AVAudioApplication.requestRecordPermission() else { throw StreamError.denied }
+        let speech = OnDeviceSpeech()
+        speech.emit = { [weak self] event in self?.emit(event) }
+        speech.onBuffer = { [weak self] buffer, when in
+            guard let self else { return }
+            self.lock.withLock {
+                if self.origin == nil {
+                    self.origin = when.isHostTimeValid
+                        ? AVAudioTime.seconds(forHostTime: when.hostTime)
+                        : ProcessInfo.processInfo.systemUptime
+                }
+            }
+            self.measure(buffer)
+        }
+        lock.withLock {
+            origin = nil
+            onDevice = speech
+        }
+        let languages = try await speech.start()
+        emit(.ready(languages: languages))
+    }
 
     /// The listening endpoint of a backend: http://mac:8000 -> ws://mac:8000/listen.
     static func url(base: URL) -> URL? {
@@ -110,6 +137,10 @@ final class ConversationStream: @unchecked Sendable {
     }
 
     func stop() {
+        lock.withLock { () -> OnDeviceSpeech? in
+            defer { onDevice = nil }
+            return onDevice
+        }?.stop()
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         let task = lock.withLock { () -> URLSessionWebSocketTask? in
@@ -122,6 +153,7 @@ final class ConversationStream: @unchecked Sendable {
 
     /// Two voices turned out to be one person (the same face spoke with both).
     func merge(keep: String, drop: String) {
+        lock.withLock { onDevice }?.merge(keep: keep, drop: drop)
         command(["type": "merge", "keep": keep, "drop": drop])
     }
 

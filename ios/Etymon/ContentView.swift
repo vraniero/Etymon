@@ -176,7 +176,28 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var status: some View {
+    /// The status line and the scene's actions: side by side when the line fits next to the
+    /// buttons, otherwise the line above them (long counts, large text).
+    private var status: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                summary
+                Spacer(minLength: 8)
+                actions
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                summary
+                HStack(spacing: 6) {
+                    Spacer()
+                    actions
+                }
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .padding(.horizontal).padding(.vertical, 6)
+    }
+
+    @ViewBuilder private var summary: some View {
         HStack(spacing: 6) {
             if model.isLoading { ProgressView().controlSize(.small) }
             if let error = model.error {
@@ -185,12 +206,24 @@ struct ContentView: View {
             } else if model.words.isEmpty {
                 Text(source.isLive ? "Point at some text." : "Pick a photo with some text.")
             } else {
-                let roots = model.response?.connections.count ?? 0
-                let meanings = model.response?.semanticLinks.count ?? 0
-                Text("\(model.words.count) words · \(roots) shared roots · \(meanings) same meaning"
-                     + (model.language.map { " · \($0)" } ?? ""))
+                Text(Self.countLine(words: model.words.count, roots: model.response?.connections.count ?? 0,
+                                  meanings: model.response?.semanticLinks.count ?? 0,
+                                  language: model.language))
             }
-            Spacer()
+        }
+    }
+
+    /// "9 words · 2 shared roots · 1 same meaning · it"; a count of none is left out.
+    static func countLine(words: Int, roots: Int, meanings: Int, language: String?) -> String {
+        var parts = [words == 1 ? "1 word" : "\(words) words"]
+        if roots > 0 { parts.append(roots == 1 ? "1 shared root" : "\(roots) shared roots") }
+        if meanings > 0 { parts.append("\(meanings) same meaning") }
+        if let language { parts.append(language) }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder private var actions: some View {
+        HStack(spacing: 6) {
             if model.response != nil {
                 Menu {
                     Picker("Show", selection: $layers) {
@@ -221,8 +254,6 @@ struct ContentView: View {
                     .accessibilityIdentifier("explore")
             }
         }
-        .font(.caption).foregroundStyle(.secondary)
-        .padding(.horizontal).padding(.vertical, 6)
     }
 
     /// Shared roots, same meanings, or both side by side.

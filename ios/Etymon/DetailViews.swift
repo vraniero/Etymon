@@ -109,6 +109,15 @@ struct WordDetail: View {
 }
 
 struct SettingsView: View {
+    /// "1.0 (3)": the version, and the build TestFlight and App Store Connect show.
+    static let version: String = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
+    }()
+
+
     @AppStorage(APIClient.baseURLKey) private var baseURL = APIClient.defaultBaseURL
     @AppStorage(TreeDepth.storageKey) private var treeDepth = TreeDepth.defaultValue
     @AppStorage(WordLimit.storageKey) private var maxWords = WordLimit.defaultValue
@@ -191,6 +200,10 @@ struct SettingsView: View {
                          + "to \(SearchDepth.defaultValue.formatted()) and goes deeper only for words "
                          + "left unconnected, up to \(SearchDepth.range.upperBound.formatted()). By hand, "
                          + "deeper finds older, more distant connections but can be noisier and slower.")
+                }
+                Section {
+                    LabeledContent("Version", value: Self.version)
+                        .accessibilityIdentifier("appVersion")
                 }
             }
             .navigationTitle("Settings")

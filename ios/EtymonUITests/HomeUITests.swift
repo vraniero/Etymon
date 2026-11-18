@@ -74,6 +74,23 @@ final class HomeUITests: XCTestCase {
         attach(app, "languages")
     }
 
+    /// The bottom of Settings says which version and build this is ("1.0 (3)").
+    func testVersionInSettings() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-api", "http://localhost:8000", "-memoryStore"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["homeSettings"].waitForExistence(timeout: 5))
+        app.buttons["homeSettings"].tap()
+        let version = app.descendants(matching: .any)["appVersion"]
+        for _ in 0..<6 where !version.isHittable { app.swipeUp() }
+        XCTAssertTrue(version.exists)
+        let shown = "\(version.label) \(version.value as? String ?? "")"
+        XCTAssertNotNil(shown.range(of: #"\d+(\.\d+)+ \(\d+\)"#, options: .regularExpression),
+                        "no version like 1.0 (3) in Settings: \(shown)")
+        attach(app, "version")
+    }
+
     private func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name

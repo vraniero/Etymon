@@ -199,24 +199,25 @@ struct ContentView: View {
                 } label: {
                     Label(layers.title, systemImage: "square.3.layers.3d")
                 }
-                .controlSize(.mini).buttonStyle(.bordered)
+                .controlSize(.mini).buttonStyle(.bordered).labelStyle(.iconOnly).fixedSize()
                 .accessibilityIdentifier("layersMenu")
             }
             if model.response != nil {
                 Button("Graph", systemImage: "point.3.connected.trianglepath.dotted") {
                     selection = .graph
                 }
-                .controlSize(.mini).buttonStyle(.bordered)
+                .controlSize(.mini).buttonStyle(.bordered).labelStyle(.iconOnly).fixedSize()
                 .accessibilityIdentifier("showGraph")
             }
             if model.response?.words.isEmpty == false {
                 Button("Save", systemImage: "bookmark") { save() }
-                    .controlSize(.mini).buttonStyle(.bordered)
+                    .controlSize(.mini).buttonStyle(.bordered).labelStyle(.iconOnly).fixedSize()
                     .accessibilityIdentifier("saveScene")
             }
             if !source.isLive, model.response?.words.isEmpty == false {
                 Button("Explore", systemImage: "cube.transparent") { explore() }
-                    .controlSize(.mini).buttonStyle(.borderedProminent)
+                    .controlSize(.mini).buttonStyle(.borderedProminent).fixedSize()
+                    .foregroundStyle(.white)
                     .accessibilityIdentifier("explore")
             }
         }

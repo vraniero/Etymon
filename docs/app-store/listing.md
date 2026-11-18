@@ -30,7 +30,7 @@ TYPE ANYTHING
 Type or paste words and read the story of how they're related, follow a word's journey across the map from where it was born, or explore the whole tree in 3D.
 
 PLAY WITH WORDS
-• Root Chain: each word must share an ancestor with the one before. Play the app or up to six friends.
+• Root Chain: each word must share an ancestor with the one before. Play against the app or with up to six friends.
 • Impostor: three words share a root, one only looks like them. Find it.
 • Cousin Hunt and Scavenger: name, or find around you, words descended from an ancient root.
 • Birthplace: where was this word born?
